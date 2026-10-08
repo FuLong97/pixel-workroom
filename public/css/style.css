@@ -157,3 +157,7 @@ main { background: radial-gradient(ellipse at center, #05070c 0%, #000 75%) !imp
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* Monitor window header stays on one line */
+#mon-agent-state, #mon-agent-coffee, #mon-agent-name { white-space: nowrap; }
+#mon-agent-name { overflow: hidden; text-overflow: ellipsis; max-width: 46%; }

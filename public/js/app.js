@@ -23,6 +23,33 @@ export class PixelWorkroomApp {
     this.initWebSocket();
     this.setupUIControls();
     this.startLoop();
+    this.applyShotMode();
+  }
+
+  // Screenshot mode for docs: ?shot=fpv|top|monitor|intercom  (+ x, y, a, res, dock, agent, tab)
+  // Used by scripts/make-screenshots.mjs; does nothing without the parameter.
+  applyShotMode() {
+    const q = new URLSearchParams(location.search);
+    const shot = q.get('shot');
+    if (!shot) return;
+    this.shotFreezeAt = performance.now() + 2500;
+    const e = this.engine;
+    if (q.get('res')) e.setResolution(q.get('res'));
+    if (q.get('dock') === '0') { this.goalPanel.collapsed = true; this.goalPanel.render(); }
+    e.showMinimap = q.get('minimap') !== '0';
+    if (q.get('x')) {
+      const a = parseFloat(q.get('a') || '1.57');
+      e.player.x = parseFloat(q.get('x'));
+      e.player.y = parseFloat(q.get('y'));
+      e.player.dirX = Math.cos(a);
+      e.player.dirY = Math.sin(a);
+      const fov = parseFloat(q.get('fov') || '0.66');   // camera plane length, bigger = wider view
+      e.player.planeX = -Math.sin(a) * fov;
+      e.player.planeY = Math.cos(a) * fov;
+    }
+    if (shot === 'top') e.setViewMode('top');
+    if (shot === 'monitor') setTimeout(() => this.openMonitorCockpit(q.get('agent') || 'bob'), 400);
+    if (shot === 'intercom') setTimeout(() => this.intercom.openIntercom(q.get('tab') || 'whiteboard'), 400);
   }
 
   getInitialFallbackState() {
@@ -355,6 +382,8 @@ export class PixelWorkroomApp {
       this.engine.update(dt);
       this.engine.render();
 
+      // screenshot mode: stop animating after a moment so a headless browser can finish
+      if (this.shotFreezeAt && now > this.shotFreezeAt) return;
       requestAnimationFrame(loop);
     };
 

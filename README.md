@@ -9,6 +9,24 @@ A pixel-art 3D office where AI agents work for you. Walk around in first person 
 - **MCP server** with 9 tools for Claude Code, Codex, Gemini CLI, Cursor, ...
 - **Token Saver** on by default (local replies, cheap models, response cache, hard budgets)
 
+<p align="center">
+  <img src="docs/images/first-person.png" alt="First-person view of the pixel workroom with five agents at their desks and the goal bar on top" width="100%">
+</p>
+
+## Screenshots
+
+| Top view | Agent monitor |
+|---|---|
+| <img src="docs/images/top-view.png" alt="Top-down view with agent name pills, health bars and rugs"> | <img src="docs/images/monitor.png" alt="Bob's monitor with live code, thoughts and terminal output"> |
+| Click the floor to walk, click an agent to open their monitor. | Watch each agent's editor, thoughts and terminal live. |
+
+| Whiteboard and intercom | A result built from one goal |
+|---|---|
+| <img src="docs/images/whiteboard.png" alt="Whiteboard with jobs and progress bars"> | <img src="docs/images/result.png" alt="Neon Drift, a game built by Bob from a single prompt"> |
+| Jobs, chat, agents and settings in one window. | "Neon Drift", built from one prompt, with touch controls for the iPhone. |
+
+*Pictures use the demo mode (fake jobs and chatter). Regenerate them with `npm run screenshots`.*
+
 ## Quick start
 
 Requirements: Node.js 20.12 or newer. For the Build button, the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI installed and signed in (run `claude` once).
@@ -156,6 +174,7 @@ node src/cli.mjs sprint "Mini game"     # scripted demo
 ```bash
 npm test          # integration, runner and Telegram bot tests (no API calls)
 npm run test:e2e  # real server + real Chrome screenshot against a local fake Telegram
+npm run screenshots [project-folder]  # regenerate docs/images (needs Chrome or Edge)
 ```
 
 ```
