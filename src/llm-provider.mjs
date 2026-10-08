@@ -1,7 +1,20 @@
 // src/llm-provider.mjs - Multi-Model Provider (Gemini, Claude, Codex/OpenAI) & Token-Saver Engine
 import https from 'https';
+import { isQuotaError } from './backends.mjs';
 
 const env = (k, d) => process.env[k] || d;
+
+// Turn a provider's error response into an Error whose message says what went wrong
+function apiError(status, json) {
+  const e = json?.error;
+  const msg = typeof e === 'string' ? e : e?.message || json?.message || 'request failed';
+  const err = new Error(`HTTP ${status}: ${msg}`);
+  err.status = status;
+  return err;
+}
+
+const KEY = { gemini: 'GEMINI_API_KEY', claude: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' };
+const REST_MS = (parseFloat(process.env.PROVIDER_COOLDOWN_MIN) || 10) * 60 * 1000;
 const DEFAULT_BUDGET = parseInt(process.env.AGENT_TOKEN_BUDGET || '400000', 10);
 
 export class LLMProviderManager {
@@ -17,6 +30,7 @@ export class LLMProviderManager {
     };
 
     // Per-agent token budget (drives the in-world health bar) + response cache
+    this.providerRest = new Map(); // provider -> time until it is tried again after running dry
     this.budgets = new Map();
     this.cache = new Map();
 
@@ -33,6 +47,26 @@ export class LLMProviderManager {
   setEcoMode(enabled) {
     this.ecoMode = !!enabled;
     return this.ecoMode;
+  }
+
+  providerChain(primary) {
+    const order = [primary, ...(process.env.LLM_FALLBACKS || 'claude,gemini,openai').split(',').map((x) => x.trim().toLowerCase())];
+    const unique = order.filter((p, i) => KEY[p] && order.indexOf(p) === i);
+    const usable = unique.filter((p) => process.env[KEY[p]]);
+    const awake = usable.filter((p) => (this.providerRest.get(p) || 0) <= Date.now());
+    return awake.length ? awake : usable; // everyone resting: try again anyway
+  }
+
+  // Model to use when a provider answers on behalf of another one
+  modelFor(provider) {
+    const pick = Object.values(this.agentModels).find((m) => m.provider === provider);
+    return this.ecoMode ? pick.fallbackModel : pick.model;
+  }
+
+  callProvider(provider, model, persona, prompt, history, maxTokens) {
+    if (provider === 'gemini') return this.callGemini(model, persona, prompt, history, maxTokens);
+    if (provider === 'claude') return this.callClaude(model, persona, prompt, history, maxTokens);
+    return this.callOpenAI(model, persona, prompt, history, maxTokens);
   }
 
   getStats() {
@@ -120,16 +154,25 @@ export class LLMProviderManager {
     // 3. Compact context window in Token Saver Mode
     const trimmedHistory = this.ecoMode ? history.slice(-2) : history.slice(-6);
 
-    try {
-      if (config.provider === 'gemini' && process.env.GEMINI_API_KEY) {
-        return await this.callGemini(modelToUse, config.persona, prompt, trimmedHistory, maxTokens);
-      } else if (config.provider === 'claude' && process.env.ANTHROPIC_API_KEY) {
-        return await this.callClaude(modelToUse, config.persona, prompt, trimmedHistory, maxTokens);
-      } else if (config.provider === 'openai' && process.env.OPENAI_API_KEY) {
-        return await this.callOpenAI(modelToUse, config.persona, prompt, trimmedHistory, maxTokens);
+    // Try the agent's own provider first, then the others that have a key (LLM_FALLBACKS order).
+    // A provider that is out of tokens / rate limited / over quota rests for a while and is skipped.
+    const chain = this.providerChain(config.provider);
+    let previous = null;
+    for (const provider of chain) {
+      try {
+        const model = provider === config.provider ? modelToUse : this.modelFor(provider);
+        const result = await this.callProvider(provider, model, config.persona, prompt, trimmedHistory, maxTokens);
+        if (previous) {
+          result.fellBackFrom = previous;
+          result.thoughts = `${result.thoughts} (${previous} was out of tokens, answered by ${provider})`;
+        }
+        return result;
+      } catch (err) {
+        const dry = isQuotaError(err.message) || [402, 429, 529].includes(err.status);
+        if (dry) this.providerRest.set(provider, Date.now() + REST_MS);
+        console.warn(`[LLMProvider] ${provider} failed (${err.message}). ${dry ? 'Out of tokens/limit, trying the next model.' : 'Trying the next model.'}`);
+        previous = provider;
       }
-    } catch (err) {
-      console.warn(`[LLMProvider] Live API call to ${config.provider} failed (${err.message}). Falling back to local engine.`);
     }
 
     // 4. Default Local Engine (Zero tokens spent!)
@@ -164,6 +207,7 @@ export class LLMProviderManager {
         res.on('end', () => {
           try {
             const json = JSON.parse(data);
+            if (res.statusCode >= 400 || json.error) return reject(apiError(res.statusCode, json));
             const text = json.candidates?.[0]?.content?.parts?.[0]?.text || '(No response)';
             const usage = json.usageMetadata || { promptTokenCount: 150, candidatesTokenCount: 60 };
 
@@ -222,6 +266,7 @@ export class LLMProviderManager {
           res.on('end', () => {
             try {
               const json = JSON.parse(data);
+              if (res.statusCode >= 400 || json.error) return reject(apiError(res.statusCode, json));
               const text = json.content?.[0]?.text || '(No response)';
               const usage = json.usage || { input_tokens: 120, output_tokens: 50 };
 
@@ -283,6 +328,7 @@ export class LLMProviderManager {
           res.on('end', () => {
             try {
               const json = JSON.parse(data);
+              if (res.statusCode >= 400 || json.error) return reject(apiError(res.statusCode, json));
               const text = json.choices?.[0]?.message?.content || '(No response)';
               const usage = json.usage || { prompt_tokens: 140, completion_tokens: 55 };
 

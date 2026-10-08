@@ -4,6 +4,7 @@ import fs from 'fs';
 import { runner } from './runner.mjs';
 import { screenshot } from './screenshot.mjs';
 import { phoneBase } from './network.mjs';
+import { backendName } from './backends.mjs';
 
 const HELP = [
   'Send me what to build and I will build it, then send you a screenshot.',
@@ -46,7 +47,8 @@ export class TelegramBot {
     this.listeners = {
       started: (e) => this.onStarted(e),
       step: (e) => this.onStep(e),
-      finished: (e) => this.onFinished(e)
+      finished: (e) => this.onFinished(e),
+      fallback: (e) => this.onFallback(e)
     };
     if (this.run.on) for (const [ev, fn] of Object.entries(this.listeners)) this.run.on(ev, fn);
   }
@@ -231,6 +233,10 @@ Step ${s.current + 1}/${s.steps.length}: ${step?.agent} (${step?.label})`);
     if (this.isMine(e.owner) && e.total > 1 && e.done < e.total) {
       this.say(e.owner, `Progress ${e.done}/${e.total}: ${e.agent} finished (${e.label}).`);
     }
+  }
+
+  onFallback(e) {
+    if (this.isMine(e.owner)) this.say(e.owner, `${backendName(e.from)} is out of tokens, so ${backendName(e.to)} takes over. Your build continues.`);
   }
 
   async onFinished(e) {

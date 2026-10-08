@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { stateManager } from './state.mjs';
 import { agentCoordinator } from './agent-coordinator.mjs';
 import { llmProvider } from './llm-provider.mjs';
+import { backendOrder, backendName, buildArgs, isQuotaError, resolveBackend } from './backends.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const WORKSPACE = process.env.WORKROOM_WORKSPACE || path.join(__dirname, '..', 'workspace');
@@ -20,6 +21,7 @@ const ROLES = {
   echo: { label: 'Docs', category: 'Research', prompt: (g) => `You are Echo, documentation specialist. Goal: "${g}". Write a concise README.md (what it is, how to open it, controls). Do not change code.` }
 };
 
+const COOLDOWN_MS = (parseFloat(process.env.BACKEND_COOLDOWN_MIN) || 30) * 60 * 1000;
 export const MAX_QUEUE = 5;        // goals waiting in total
 export const MAX_PER_OWNER = 2;    // goals one person may have waiting
 
@@ -31,6 +33,7 @@ class Runner extends EventEmitter {
     this.queue = [];
     this.job = null;
     this.seq = 0;
+    this.cooldown = new Map(); // backend -> time until it is tried again after running out of tokens
     this.reset();
     this.dir = this.newestProject();
   }
@@ -56,6 +59,7 @@ class Runner extends EventEmitter {
     this.current = -1;
     this.error = null;
     this.cancelled = false;
+    this.via = null;
     // keep the last project folder so the next goal can opt in to improving it
     this.dir = this.dir || null;
   }
@@ -67,6 +71,8 @@ class Runner extends EventEmitter {
       mode: this.mode,
       dir: this.dir,
       owner: this.job?.owner ?? null,
+      via: this.via,
+      resting: [...this.cooldown].filter(([, t]) => t > Date.now()).map(([k, t]) => ({ backend: k, until: t })),
       queue: this.queue.map((j) => ({ id: j.id, goal: j.goal, mode: j.mode, owner: j.owner })),
       steps: this.steps,
       current: this.current,
@@ -207,7 +213,13 @@ class Runner extends EventEmitter {
     this.finishJob(null);
   }
 
-  runStep(step) {
+  coolingDown(kind) {
+    return (this.cooldown.get(kind) || 0) > Date.now();
+  }
+
+  // Try the models in order. Only "out of tokens" or "not available" moves on to the next one;
+  // a real error is reported as it is instead of being hidden behind another model.
+  async runStep(step) {
     const agent = stateManager.agents[step.agent];
     const role = ROLES[step.agent];
     const prompt = role.prompt(this.goal, this.mode === 'team');
@@ -216,55 +228,106 @@ class Runner extends EventEmitter {
     agent.screen.thoughts = 'Reading the goal...';
     this.refreshAgent(agent);
 
-    const model = process.env.CLAUDE_RUN_MODEL || (llmProvider.ecoMode ? 'sonnet' : 'opus');
-    const args = [
-      '-p', prompt,
-      '--model', model,
-      '--permission-mode', 'acceptEdits',
-      '--allowedTools', 'Read,Write,Edit,Glob,Grep',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--max-turns', process.env.CLAUDE_RUN_MAX_TURNS || '30'
-    ];
+    const all = backendOrder();
+    // models that ran dry recently are skipped; if every one is resting, try them all again
+    const order = all.filter((k) => !this.coolingDown(k));
+    const list = order.length ? order : all;
+    const problems = [];
+    let previous = null;
+
+    for (const kind of list) {
+      if (this.cancelled) break;
+      const target = resolveBackend(kind);
+      if (!target) {
+        problems.push(`${backendName(kind)} is not installed`);
+        continue;
+      }
+      if (previous) {
+        const msg = `${backendName(previous)} is out of tokens, continuing with ${backendName(kind)}.`;
+        this.push(agent, msg);
+        stateManager.broadcast(`🔁 ${msg}`, 'lead');
+        this.emit('fallback', { owner: this.job?.owner, goal: this.goal, from: previous, to: kind });
+        previous = null;
+      }
+      this.via = kind;
+      const r = await this.execBackend(kind, target, step, agent, task, prompt);
+      if (r.ok) {
+        this.finishStep(agent, task, true);
+        return true;
+      }
+      if (this.cancelled) break;
+      if (r.quota) {
+        this.cooldown.set(kind, Date.now() + COOLDOWN_MS);
+        problems.push(`${backendName(kind)} is out of tokens`);
+        previous = kind;
+        continue;
+      }
+      if (r.unavailable) {
+        problems.push(r.error);
+        continue;
+      }
+      this.finishStep(agent, task, false);
+      this.fail(r.error);
+      return false;
+    }
+
+    this.finishStep(agent, task, false);
+    if (this.cancelled) {
+      this.fail('Cancelled.');
+    } else {
+      this.fail(`No model could do this step: ${problems.join('; ') || 'none configured'}.`);
+    }
+    return false;
+  }
+
+  finishStep(agent, task, ok) {
+    task.status = ok ? 'DONE' : 'BLOCKED';
+    if (ok) task.progress = 100;
+    agent.state = 'IDLE';
+    agent.currentTask = 'Idle — Awaiting instructions from lead';
+    agent.status = ok ? 'Finished my part' : 'Stopped';
+    this.refreshAgent(agent);
+    stateManager.saveStateToFile();
+  }
+
+  // Runs one CLI for one step. Resolves { ok } or { quota } / { unavailable } / { error }.
+  execBackend(kind, target, step, agent, task, prompt) {
+    const args = [...target.prefix, ...buildArgs(kind, prompt, this.cwd)];
+    const name = backendName(kind);
+    const logFile = path.join(WORKSPACE, '..', 'run.log');
+    const log = (text) => { try { fs.appendFileSync(logFile, text); } catch { /* logging is best effort */ } };
+    log(`\n=== ${new Date().toISOString()} ${step.agent} via ${kind} ===\n`);
 
     return new Promise((resolve) => {
       let child;
       try {
-        const bin = process.env.CLAUDE_BIN || 'claude';
-        // CLAUDE_BIN may point at a .mjs script (used for testing without spending tokens)
-        child = /.m?js$/.test(bin)
-          ? spawn(process.execPath, [bin, ...args], { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-          : spawn(bin, args, { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+        child = spawn(target.cmd, args, { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
       } catch (e) {
-        this.fail(`Could not start Claude Code: ${e.message}`);
-        return resolve(false);
+        return resolve({ unavailable: true, error: `${name} could not start: ${e.message}` });
       }
       this.child = child;
-      let buf = '';
-      let stderr = '';
-      let failedMsg = null;
-      let lastText = '';
-      const logFile = path.join(WORKSPACE, '..', 'run.log');
-      fs.appendFileSync(logFile, `
-=== ${new Date().toISOString()} ${step.agent} ===
-`);
 
-      const handle = (ev) => {
+      let buf = '';
+      let tail = '';          // last output, used to tell "out of tokens" apart from a real error
+      let failedMsg = null;   // set by Claude's result event when it reports an error
+      let authFailed = false;
+      let lastText = '';
+      let lines = [];
+      let spawnFailed = false;
+
+      const handleClaude = (ev) => {
         if (ev.type === 'assistant') {
           for (const c of ev.message?.content || []) {
             if (c.type === 'text' && c.text) {
-              if (/Failed to authenticate|401|Not logged in|Invalid API key/i.test(c.text)) {
-                failedMsg = 'Claude Code is not logged in. Open a terminal, run "claude" once, sign in, then try again.';
-              }
+              if (/Failed to authenticate|Not logged in|Invalid API key/i.test(c.text)) authFailed = true;
               agent.screen.thoughts = c.text.slice(0, 280);
               lastText = c.text;
             } else if (c.type === 'tool_use') {
               const inp = c.input || {};
               const file = inp.file_path ? path.basename(inp.file_path) : '';
               if (c.name === 'Write' || c.name === 'Edit') {
-                const text = inp.content || inp.new_string || '';
                 agent.screen.file = file;
-                agent.screen.lines = text.split('\n').slice(0, 40);
+                agent.screen.lines = (inp.content || inp.new_string || '').split('\n').slice(0, 40);
                 this.push(agent, `${c.name} ${file}`);
               } else {
                 this.push(agent, `${c.name} ${file || inp.pattern || ''}`.trim());
@@ -278,7 +341,7 @@ class Runner extends EventEmitter {
           const used = (u.input_tokens || 0) + (u.output_tokens || 0);
           llmProvider.getBudget(step.agent).used += used;
           this.push(agent, `Finished (${used.toLocaleString()} tokens, ${ev.num_turns || '?'} turns)`);
-          if (ev.is_error && !failedMsg) {
+          if (ev.is_error) {
             const why = {
               error_max_turns: 'Claude Code ran out of turns (raise CLAUDE_RUN_MAX_TURNS in .env).',
               error_during_execution: 'Claude Code failed while working.'
@@ -288,6 +351,15 @@ class Runner extends EventEmitter {
         }
       };
 
+      const handleText = (line) => {
+        lines.push(line);
+        if (lines.length > 40) lines.shift();
+        agent.screen.lines = lines.slice(-30);
+        agent.screen.thoughts = line.slice(0, 280);
+        task.progress = Math.min(90, (task.progress || 10) + 1);
+        this.refreshAgent(agent);
+      };
+
       child.stdout.on('data', (d) => {
         buf += d;
         let i;
@@ -295,30 +367,33 @@ class Runner extends EventEmitter {
           const line = buf.slice(0, i).trim();
           buf = buf.slice(i + 1);
           if (!line) continue;
-          try { fs.appendFileSync(logFile, line.slice(0, 600) + '\n'); } catch {}
-          try { handle(JSON.parse(line)); } catch { /* ignore non-JSON */ }
+          log(line.slice(0, 600) + '\n');
+          tail = (tail + '\n' + line).slice(-1500);
+          if (kind === 'claude') {
+            try { handleClaude(JSON.parse(line)); } catch { /* not JSON */ }
+          } else {
+            handleText(line);
+          }
         }
       });
-      child.stderr.on('data', (d) => { stderr += d; try { fs.appendFileSync(logFile, '[stderr] ' + d); } catch {} });
+      child.stderr.on('data', (d) => {
+        log('[stderr] ' + d);
+        tail = (tail + '\n' + d).slice(-1500);
+      });
       child.on('error', (e) => {
-        this.fail(e.code === 'ENOENT' ? 'Claude Code CLI not found. Install it and make sure "claude" runs in a terminal.' : e.message);
-        resolve(false);
+        spawnFailed = true;
+        this.child = null;
+        resolve({ unavailable: true, error: e.code === 'ENOENT' ? `${name} is not installed (command not found)` : `${name}: ${e.message}` });
       });
       child.on('close', (code) => {
         this.child = null;
-        task.status = failedMsg || code ? 'BLOCKED' : 'DONE';
-        task.progress = failedMsg || code ? task.progress : 100;
-        agent.state = failedMsg || code ? 'IDLE' : 'IDLE';
-        agent.currentTask = 'Idle — Awaiting instructions from lead';
-        agent.status = failedMsg || code ? 'Stopped' : 'Finished my part';
-        this.refreshAgent(agent);
-        stateManager.saveStateToFile();
-        if (this.cancelled) { this.fail('Cancelled.'); return resolve(false); }
-        if (failedMsg || code) {
-          this.fail(failedMsg || `Claude Code exited with code ${code}. ${stderr.trim().slice(0, 240)}`);
-          return resolve(false);
-        }
-        resolve(true);
+        if (spawnFailed) return;
+        if (code === 0 && !failedMsg && !authFailed) return resolve({ ok: true });
+        if (authFailed) return resolve({ unavailable: true, error: `${name} is not logged in (run "${kind}" once in a terminal)` });
+        const detail = failedMsg || `${name} exited with code ${code}. ${tail.trim().slice(-240)}`;
+        // quota wording is only trusted in an error context, never in normal model output
+        if (isQuotaError(failedMsg || tail)) return resolve({ quota: true, error: detail });
+        resolve({ error: detail });
       });
     });
   }

@@ -107,6 +107,15 @@ await bot.handle(msg(42, '/stop'));
 await idle();
 console.log('  ✓');
 
+console.log('▶ a model switch is announced to the person who asked');
+runner.emit('fallback', { owner: '43', goal: 'x', from: 'claude', to: 'codex' });
+await wait(() => texts(43).at(-1)?.includes('Claude Code is out of tokens, so Codex takes over'));
+const msgs = calls.length;
+runner.emit('fallback', { owner: 'web', goal: 'x', from: 'claude', to: 'codex' });   // web goals are not announced on Telegram
+await new Promise((r) => setTimeout(r, 100));
+assert.strictEqual(calls.length, msgs, 'nothing sent for a web goal');
+console.log('  ✓');
+
 console.log('\n🎉 TELEGRAM TESTS PASSED');
 bot.stop();
 process.exit(0);

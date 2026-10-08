@@ -77,11 +77,12 @@ export class GoalPanel {
         : '';
       body = `
         <div class="flex items-center justify-between mb-1.5">
-          <div class="text-xs text-slate-200 truncate">🎯 <strong>${this.esc(s.goal)}</strong></div>
+          <div class="text-xs text-slate-200 truncate">🎯 <strong>${this.esc(s.goal)}</strong>${s.via ? ` <span class="text-[10px] text-slate-500">via ${({ claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' })[s.via] || this.esc(s.via)}</span>` : ''}</div>
           <button id="goal-stop" class="ml-2 px-2 py-0.5 rounded bg-rose-900/80 hover:bg-rose-700 text-rose-100 text-[11px]">■ Stop</button>
         </div>
         <div class="flex flex-wrap gap-1.5">${chips}</div>
         <div class="text-[10px] text-slate-500 mt-1.5">Click an agent to watch their screen. Files appear in the workspace folder.</div>
+        ${s.resting?.length ? `<div class="mt-1.5 text-[11px] text-amber-300">😴 Out of tokens, resting: ${s.resting.map((r) => ({ claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' })[r.backend] || this.esc(r.backend)).join(', ')}</div>` : ''}
         ${queueList}
         ${this.flash ? `<div class="mt-1.5 text-xs text-amber-300">${this.esc(this.flash)}</div>` : ''}
         <div class="flex items-center gap-1.5 mt-2">

@@ -107,6 +107,15 @@ The bar counts tokens spent by the room itself: goal runs and in-room agents tha
 
 Saving tokens without losing quality: Token Saver answers trivial messages locally, uses cheap model tiers, sends only the last two messages as context, caps replies, and caches repeated prompts. Toggle it in the intercom, or `node src/cli.mjs eco on|off`. Set `CLAUDE_RUN_MODEL=haiku` for cheaper builds.
 
+## When a model is out of tokens
+
+Nothing stops half way. If a model runs out of tokens, hits its usage limit or is rate limited, the next one takes over automatically and you are told ("Claude Code is out of tokens, continuing with Codex").
+
+- **Build button / Telegram:** tries Claude Code, then Codex, then Gemini CLI (`RUN_BACKENDS` changes the order). A model that ran dry rests for 30 minutes (`BACKEND_COOLDOWN_MIN`) so the next steps do not waste a call on it. Codex and Gemini are started with restricted rights (Codex: `workspace-write` sandbox, Gemini: file edits only), and each CLI must be installed and signed in. Models that are not installed are skipped.
+- **In-room agents (API keys):** the agent's own provider first, then the others that have a key (`LLM_FALLBACKS`). If every provider is dry they answer with the free local replies.
+- **Real errors are not hidden.** Only "out of tokens / limit / quota / overloaded" moves on to the next model. Anything else (a bug, a refused action) is shown as it is.
+- The per-agent **health bar** is your own spending cap and is separate from this: at 0 an agent stops using paid APIs instead of switching to another paid model.
+
 ## Configuration
 
 Copy [`.env.example`](.env.example) to `.env`. Everything is optional. Without API keys the in-room agents reply with free local heuristics. Key settings: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `CLAUDE_RUN_MODEL`, `AGENT_TOKEN_BUDGET`, `PORT`, `WORKROOM_DEMO=1` (fake jobs and chatter for demos).
