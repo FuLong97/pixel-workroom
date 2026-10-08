@@ -1,0 +1,44 @@
+{
+  "name": "pixel-workroom-mcp",
+  "version": "1.0.0",
+  "description": "Pixel-art 3D workroom (first-person + top view) where AI agents collaborate over MCP and build things from a goal",
+  "main": "src/server.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "mcp": "node src/mcp-server.mjs",
+    "cli": "node src/cli.mjs",
+    "test": "node test/workroom.test.mjs && node test/runner.test.mjs"
+  },
+  "keywords": [
+    "pixel-art",
+    "mcp",
+    "agents",
+    "first-person-view",
+    "workroom",
+    "claude",
+    "codex",
+    "gemini",
+    "ai-agents"
+  ],
+  "author": "Pixel Workroom contributors",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "ws": "^8.22.0",
+    "zod": "^3.25 || ^4.0"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "files": [
+    "src",
+    "public",
+    "test",
+    "start.bat",
+    "mcp_config.example.json",
+    ".env.example",
+    "README.md",
+    "LICENSE"
+  ]
+}

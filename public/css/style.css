@@ -1,0 +1,85 @@
+/* public/css/style.css - Retro Cyber & Pixel Art Aesthetic */
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+
+:root {
+  --bg-dark: #0a0c10;
+  --panel-bg: rgba(15, 23, 42, 0.94);
+  --border-cyan: #38bdf8;
+  --border-green: #22c55e;
+  --glow-cyan: 0 0 10px rgba(56, 189, 248, 0.4);
+  --glow-green: 0 0 10px rgba(34, 197, 94, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+  user-select: none;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-dark);
+  color: #f8fafc;
+  font-family: 'Share Tech Mono', monospace;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* 3D Canvas with Crisp Pixel Scaling */
+#render-canvas {
+  width: 100%;
+  height: 100%;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: -webkit-crisp-edges;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  cursor: grab;
+  background: #000;
+}
+
+#render-canvas:active {
+  cursor: grabbing;
+}
+
+/* CRT Screen Flicker & Phosphor Bloom */
+.crt-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  background: radial-gradient(circle at center, transparent 65%, rgba(0, 0, 0, 0.5) 100%);
+}
+
+/* Retro Pixel Font for Headers */
+.font-pixel {
+  font-family: 'VT323', monospace;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.8);
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Pulsing indicators */
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; filter: drop-shadow(0 0 8px #22c55e); }
+}
+
+.pulse-led {
+  animation: pulseGlow 2s infinite ease-in-out;
+}
