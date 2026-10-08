@@ -4,6 +4,8 @@
 const OLLAMA = 'http://localhost:11434/v1';
 const LMSTUDIO = 'http://localhost:1234/v1';
 
+import { getSettings } from './settings.mjs';
+
 let cache = { at: 0, info: null };
 
 // fetch with a timeout whose timer is always cleaned up (AbortSignal.timeout leaves handles that
@@ -69,17 +71,19 @@ export function resetLocalCache() {
 
 const bySize = (info) => (a, b) => (info.meta[a]?.size ?? 1e12) - (info.meta[b]?.size ?? 1e12);
 
-/** Model for quick chat answers: LOCAL_LLM_MODEL, else the smallest installed one. */
+/** Model for quick chat answers: your choice in the Models tab, then LOCAL_LLM_MODEL, else the smallest installed one. */
 export function pickChatModel(info) {
-  const wanted = process.env.LOCAL_LLM_MODEL;
-  if (wanted && info.models.includes(wanted)) return wanted;
+  for (const wanted of [getSettings().localChat, process.env.LOCAL_LLM_MODEL]) {
+    if (wanted && info.models.includes(wanted)) return wanted;
+  }
   return [...info.models].sort(bySize(info))[0];
 }
 
-/** Model for builds: LOCAL_RUN_MODEL, else the smallest one that can use tools, else the chat model. */
+/** Model for builds: your choice, then LOCAL_RUN_MODEL, else the smallest one that can use tools, else the chat model. */
 export function pickToolModel(info) {
-  const wanted = process.env.LOCAL_RUN_MODEL;
-  if (wanted) return wanted;
+  for (const wanted of [getSettings().localBuild, process.env.LOCAL_RUN_MODEL]) {
+    if (wanted && info.models.includes(wanted)) return wanted;
+  }
   const tooled = info.models.filter((m) => info.meta[m]?.tools).sort(bySize(info));
   return tooled[0] || pickChatModel(info);
 }
@@ -90,10 +94,10 @@ export function stripThinking(text = '') {
 }
 
 /** One chat answer from the local model. Returns { text, model, tokens }. */
-export async function localChat({ persona, prompt, history = [], maxTokens = 300 }) {
+export async function localChat({ persona, prompt, history = [], maxTokens = 300, model: forced = null }) {
   const info = await detectLocal();
   if (!info.available) throw new Error(info.reason);
-  const model = pickChatModel(info);
+  const model = forced && info.models.includes(forced) ? forced : pickChatModel(info);
   const thinker = /qwen3|deepseek-r1|gpt-oss/i.test(model);
 
   const messages = [

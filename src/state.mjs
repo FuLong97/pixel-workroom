@@ -8,6 +8,27 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STATE_FILE = process.env.WORKROOM_STATE_FILE || path.join(__dirname, '..', 'workroom-state.json');
 
+// Nothing in the room needs more than a few lines of text; this keeps a runaway message from
+// ever filling the screen or the state file.
+export const MAX_TEXT = 2000;
+export const clip = (text, max = MAX_TEXT) => {
+  const s = String(text ?? '');
+  return s.length > max ? s.slice(0, max) + ' … [shortened]' : s;
+};
+
+// Shrink a saved state that grew out of hand (older versions could loop and write megabytes)
+export function compactState(data) {
+  for (const m of data.intercomMessages || []) m.text = clip(m.text);
+  for (const a of Object.values(data.agents || {})) {
+    const sc = a.screen;
+    if (!sc) continue;
+    sc.logs = (sc.logs || []).slice(-25).map((l) => clip(l, 500));
+    sc.lines = (sc.lines || []).slice(0, 80).map((l) => clip(l, 300));
+    sc.thoughts = clip(sc.thoughts, 500);
+  }
+  return data;
+}
+
 export class WorkroomStateManager extends EventEmitter {
   constructor() {
     super();
@@ -17,7 +38,7 @@ export class WorkroomStateManager extends EventEmitter {
         name: 'Alice',
         role: 'Systems Architect',
         color: '#60a5fa',
-        pos: { x: 4.5, y: 0, z: 8.5 },
+        pos: { x: 6.5, y: 0, z: 8.5 },
         dir: Math.PI / 2, // Facing East (into room)
         deskId: 1,
         status: 'Designing Microservice Topology',
@@ -55,7 +76,7 @@ export class WorkroomStateManager extends EventEmitter {
         name: 'Bob',
         role: 'Pixel & Frontend Engineer',
         color: '#f472b6',
-        pos: { x: 4.5, y: 0, z: 14.5 },
+        pos: { x: 6.5, y: 0, z: 14.0 },
         dir: Math.PI / 2,
         deskId: 2,
         status: 'Rendering Raycaster Ray Buffers',
@@ -126,7 +147,7 @@ export class WorkroomStateManager extends EventEmitter {
         name: 'Diana',
         role: 'Security & QA Auditor',
         color: '#fbbf24',
-        pos: { x: 15.5, y: 0, z: 14.5 },
+        pos: { x: 15.5, y: 0, z: 14.0 },
         dir: -Math.PI / 2,
         deskId: 4,
         status: 'Auditing MCP Tool Boundaries & Tests',
@@ -159,7 +180,7 @@ export class WorkroomStateManager extends EventEmitter {
         name: 'Echo',
         role: 'Autonomous Research Agent',
         color: '#a78bfa',
-        pos: { x: 10.0, y: 0, z: 20.5 },
+        pos: { x: 11.0, y: 0, z: 19.5 },
         dir: Math.PI, // Facing North (into room)
         deskId: 5,
         status: 'Synthesizing MCP Specifications',
@@ -251,7 +272,7 @@ export class WorkroomStateManager extends EventEmitter {
       mcpToolCalls: 24,
       packetsTransferred: 1420,
       uptimeSeconds: 3600,
-      activeSprint: 'Sprint 4: First-Person 3D Pixel Space & MCP Intercom'
+      activeGoal: 'None'
     };
 
     // Start blank unless demo mode is requested (WORKROOM_DEMO=1)
@@ -264,11 +285,35 @@ export class WorkroomStateManager extends EventEmitter {
     try {
       if (fs.existsSync(STATE_FILE)) {
         const raw = fs.readFileSync(STATE_FILE, 'utf8');
-        const data = JSON.parse(raw);
-        if (data.agents) for (const [id, a] of Object.entries(data.agents)) this.agents[id] = Object.assign(this.agents[id] || {}, a);
+        const data = compactState(JSON.parse(raw));
+        // a bloated file is rewritten small right away, so the next start is fast and clean
+        if (raw.length > 1000000) this.healFile = true;
+        if (data.agents) {
+          for (const [id, a] of Object.entries(data.agents)) {
+            const existing = this.agents[id];
+            if (existing?.tokenBudget) {
+              // the token bar lives in this process; an older copy from another process must not roll it back
+              const { tokenBudget, energy, ...rest } = a;
+              Object.assign(existing, rest);
+            } else {
+              this.agents[id] = Object.assign(existing || {}, a);
+            }
+          }
+        }
         if (data.intercomMessages) this.intercomMessages = data.intercomMessages;
-        if (data.whiteboard) this.whiteboard = data.whiteboard;
+        if (data.whiteboard) {
+          // Keep the card objects we already have: a running job holds references to them and keeps
+          // updating their progress. Cards that only exist in the file (added elsewhere) are taken over.
+          const mine = new Map(this.whiteboard.map((c) => [c.id, c]));
+          this.whiteboard = data.whiteboard.map((c) => mine.get(c.id) || c);
+        }
         if (data.stats) this.stats = { ...this.stats, ...data.stats };
+        if (this.healFile) {
+          this.healFile = false;
+          const before = fs.statSync(STATE_FILE).size;
+          this.saveStateToFile();
+          console.log(`[StateManager] The saved state was bloated (${(before / 1048576).toFixed(1)} MB). Shortened it to ${(fs.statSync(STATE_FILE).size / 1024).toFixed(0)} KB.`);
+        }
       }
     } catch (err) {
       console.warn('[StateManager] Could not load persisted state:', err.message);
@@ -287,6 +332,8 @@ export class WorkroomStateManager extends EventEmitter {
         stats: this.stats
       };
       fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2), 'utf8');
+      // remember our own write so the file watcher does not "reload" what we just saved
+      this.lastWrittenMtime = fs.statSync(STATE_FILE).mtimeMs;
     } catch (err) {
       console.warn('[StateManager] Could not save state:', err.message);
     }
@@ -300,7 +347,7 @@ export class WorkroomStateManager extends EventEmitter {
       timestamp: new Date().toLocaleTimeString(),
       sender,
       recipient: 'all',
-      text: message,
+      text: clip(message),
       type: 'broadcast'
     };
     this.intercomMessages.push(msg);
@@ -313,15 +360,35 @@ export class WorkroomStateManager extends EventEmitter {
     return msg;
   }
 
+  // Emergency brake: agents talking to each other faster than people ever would means a loop.
+  // More than 8 agent-to-agent messages within 10 seconds are dropped until it calms down.
+  agentChatTooBusy() {
+    const now = Date.now();
+    this.agentChatTimes = (this.agentChatTimes || []).filter((t) => now - t < 10000);
+    if (this.agentChatTimes.length >= 8) return true;
+    this.agentChatTimes.push(now);
+    return false;
+  }
+
   sendMessage(recipient, message, sender = 'lead') {
     const msg = {
       id: `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       timestamp: new Date().toLocaleTimeString(),
       sender,
       recipient,
-      text: message,
+      text: clip(message),
       type: 'direct'
     };
+    message = msg.text;
+
+    const bothAgents = this.agents[String(sender).toLowerCase()] && this.agents[String(recipient).toLowerCase()];
+    if (bothAgents && this.agentChatTooBusy()) {
+      if (!this.loopWarned || Date.now() - this.loopWarned > 10000) {
+        this.loopWarned = Date.now();
+        console.warn(`[StateManager] Agents are messaging each other too fast (${sender} -> ${recipient}). Dropping messages to stop a loop.`);
+      }
+      return { ...msg, dropped: true };
+    }
     this.intercomMessages.push(msg);
     if (this.intercomMessages.length > 100) this.intercomMessages.shift();
     this.stats.mcpToolCalls++;
@@ -424,7 +491,7 @@ export class WorkroomStateManager extends EventEmitter {
   resetToBlank() {
     this.whiteboard = [];
     this.intercomMessages = [];
-    this.stats.activeSprint = 'None';
+    this.stats.activeGoal = 'None';
     Object.values(this.agents).forEach((a) => {
       a.currentTask = 'Idle — Awaiting instructions from lead';
       a.status = 'Idle — Ready for task assignment';

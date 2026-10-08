@@ -37,7 +37,7 @@ async function runTests() {
   console.log('  ✓ Bob received message and reacted with cognitive state transition');
 
   // Test 5: Whiteboard Task Assignment
-  console.log('▶ Test 5: Assigning Whiteboard Sprint Task...');
+  console.log('▶ Test 5: Assigning Whiteboard Task...');
   const taskResult = stateManager.assignTask('charlie', 'Build JSON-RPC Batch Handler', 'Handle multi-tool calls in single packet', 'MCP');
   assert.strictEqual(taskResult.task.assignee, 'charlie');
   assert.strictEqual(stateManager.agents.charlie.currentTask, 'Build JSON-RPC Batch Handler');

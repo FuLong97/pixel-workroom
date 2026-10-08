@@ -7,3 +7,4 @@ run.log
 .gemini/
 .claude/
 .DS_Store
+workroom-settings.json

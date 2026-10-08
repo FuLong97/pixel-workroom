@@ -1,6 +1,6 @@
 // public/js/engine3d.js - High-Definition First-Person 3D Pixel Raycaster Engine
 import { audioSynth } from './audio.js';
-import { FloorCeilingRenderer, PostFX, lightAt } from './fx.js';
+import { FloorCeilingRenderer, PostFX, lightAt, setLightLevel } from './fx.js';
 
 export class Workroom3DEngine {
   constructor(canvas, assetManager, state) {
@@ -75,6 +75,7 @@ export class Workroom3DEngine {
     // Visual Flags
     this.showScanlines = true;
     this.showMinimap = true;
+    this.lightsOn = true;
     this.viewMode = 'fpv'; // 'fpv' | 'top'
     this.hover = null;
     this.topLayout = null;
@@ -114,27 +115,104 @@ export class Workroom3DEngine {
   }
 
   setupOfficeAssets() {
+    // h = height in wall units (the picture's own proportions give the width), r = how much room it takes
+    // up for walking (0 = walk through), icon = size in the top view. Zones: work desks around a meeting
+    // table in the middle, a lounge with the machines on the east wall, shelves and servers along the
+    // north and south walls, plants and lamps along the windows.
+    const D = (id, spriteId, x, y, h, r, icon, title = '') => ({ id, type: 'prop', decor: true, title, x, y, spriteId, h, r, icon });
+
     this.sprites = [
-      // Autonomous Agents at Workstations
-      { id: 'alice', type: 'agent', agentId: 'alice', x: 5.0, y: 9.0, spriteId: 'agent_alice' },
-      { id: 'bob', type: 'agent', agentId: 'bob', x: 5.0, y: 15.0, spriteId: 'agent_bob' },
-      { id: 'charlie', type: 'agent', agentId: 'charlie', x: 17.0, y: 9.0, spriteId: 'agent_charlie' },
-      { id: 'diana', type: 'agent', agentId: 'diana', x: 17.0, y: 15.0, spriteId: 'agent_diana' },
-      { id: 'echo', type: 'agent', agentId: 'echo', x: 11.0, y: 20.0, spriteId: 'agent_echo' },
+      // The five desks, two on each side of the meeting table and one in the research corner
+      { id: 'alice', type: 'agent', agentId: 'alice', x: 6.5, y: 8.5, spriteId: 'agent_alice', h: 0.95, r: 0.7, icon: 2.4 },
+      { id: 'bob', type: 'agent', agentId: 'bob', x: 6.5, y: 14.0, spriteId: 'agent_bob', h: 0.95, r: 0.7, icon: 2.4 },
+      { id: 'charlie', type: 'agent', agentId: 'charlie', x: 15.5, y: 8.5, spriteId: 'agent_charlie', h: 0.95, r: 0.7, icon: 2.4 },
+      { id: 'diana', type: 'agent', agentId: 'diana', x: 15.5, y: 14.0, spriteId: 'agent_diana', h: 0.95, r: 0.7, icon: 2.4 },
+      { id: 'echo', type: 'agent', agentId: 'echo', x: 11.0, y: 19.5, spriteId: 'agent_echo', h: 0.95, r: 0.7, icon: 2.4 },
 
-      // Breakroom / Lounge Zone
-      { id: 'arcade', type: 'arcade', title: 'Antigravity Arcade', x: 21.0, y: 12.0, spriteId: 'prop_arcade' },
-      { id: 'vending', type: 'vending', title: 'Soda & Snack Machine', x: 21.0, y: 16.0, spriteId: 'prop_vending' },
-      { id: 'coffee_bar', type: 'coffee_bar', title: 'Espresso Coffee Bar', x: 21.0, y: 8.0, spriteId: 'prop_coffee_bar' },
-      { id: 'couch1', type: 'couch', title: 'Leather Lounge Sofa', x: 20.5, y: 4.5, spriteId: 'prop_couch' },
+      // Lounge and break machines along the east wall
+      { id: 'couch1', type: 'couch', title: 'Leather Lounge Sofa', x: 20.6, y: 4.3, spriteId: 'prop_couch', h: 0.55, r: 0.8, icon: 2.2 },
+      { id: 'coffee_bar', type: 'coffee_bar', title: 'Espresso Coffee Bar', x: 21.3, y: 8.6, spriteId: 'prop_coffee_bar', h: 0.6, r: 0.6, icon: 1.8 },
+      { id: 'arcade', type: 'arcade', title: 'Antigravity Arcade', x: 21.4, y: 11.8, spriteId: 'prop_arcade', h: 1.05, r: 0.5, icon: 1.9 },
+      { id: 'vending', type: 'vending', title: 'Soda & Snack Machine', x: 21.4, y: 14.6, spriteId: 'prop_vending', h: 1.05, r: 0.5, icon: 1.9 },
+      D('cooler', 'prop_cooler', 21.5, 17.4, 0.62, 0.35, 1.3, 'Water Cooler'),
+      D('coffee_table', 'prop_coffee_table', 20.4, 6.2, 0.32, 0.55, 1.8),
+      D('bin1', 'prop_bin', 19.7, 8.9, 0.3, 0.25, 0.9),
+      D('lamp_lounge', 'prop_lamp', 19.3, 3.0, 1.0, 0.2, 0.9),
 
-      // Plants & Amenities
-      { id: 'ficus1', type: 'prop', title: 'Ficus Tree', x: 2.0, y: 3.0, spriteId: 'prop_ficus' },
-      { id: 'ficus2', type: 'prop', title: 'Ficus Tree', x: 21.0, y: 2.5, spriteId: 'prop_ficus' },
-      { id: 'ficus3', type: 'prop', title: 'Ficus Tree', x: 2.0, y: 22.0, spriteId: 'prop_ficus' },
-      { id: 'cooler', type: 'prop', title: 'Water Cooler', x: 21.0, y: 21.0, spriteId: 'prop_cooler' },
-      { id: 'bin1', type: 'prop', title: 'Recycling Bin', x: 3.5, y: 9.5, spriteId: 'prop_bin' },
-      { id: 'bin2', type: 'prop', title: 'Recycling Bin', x: 18.5, y: 9.5, spriteId: 'prop_bin' }
+      // Meeting corner in the middle of the room
+      D('table', 'prop_table', 11.0, 11.4, 0.5, 0.85, 2.7),
+      D('chair1', 'prop_chair', 9.8, 11.4, 0.4, 0.25, 0.9),
+      D('chair2', 'prop_chair', 12.2, 11.4, 0.4, 0.25, 0.9),
+      D('chair3', 'prop_chair', 10.5, 10.3, 0.4, 0.25, 0.9),
+      D('chair4', 'prop_chair', 11.5, 10.3, 0.4, 0.25, 0.9),
+      D('chair5', 'prop_chair', 10.5, 12.5, 0.4, 0.25, 0.9),
+      D('chair6', 'prop_chair', 11.5, 12.5, 0.4, 0.25, 0.9),
+      D('board', 'prop_whiteboard', 8.2, 2.0, 1.0, 0.5, 2.0),
+
+      // Along the north wall: printer, cabinets, shelves
+      D('printer', 'prop_printer', 2.6, 2.4, 0.4, 0.4, 1.4),
+      D('cabinet1', 'prop_cabinet', 4.0, 1.8, 0.62, 0.4, 1.1),
+      D('shelf1', 'prop_bookshelf', 13.2, 1.8, 1.05, 0.5, 1.5),
+      D('shelf2', 'prop_bookshelf', 14.6, 1.8, 1.05, 0.5, 1.5),
+      D('plant_n', 'prop_plant_small', 16.0, 2.0, 0.4, 0.25, 0.9),
+      D('cabinet2', 'prop_cabinet', 17.2, 1.8, 0.62, 0.4, 1.1),
+
+      // Along the window wall (west): lamps and plants in a rhythm
+      D('lamp_w1', 'prop_lamp', 1.8, 6.0, 1.0, 0.2, 0.9),
+      D('lamp_w2', 'prop_lamp', 1.8, 11.5, 1.0, 0.2, 0.9),
+      D('lamp_w3', 'prop_lamp', 1.8, 17.0, 1.0, 0.2, 0.9),
+      D('plant_w1', 'prop_plant_small', 1.9, 8.8, 0.4, 0.25, 0.9),
+      D('plant_w2', 'prop_plant_small', 1.9, 14.3, 0.4, 0.25, 0.9),
+      D('plant_w3', 'prop_plant_small', 1.9, 19.8, 0.4, 0.25, 0.9),
+
+      // South: server racks, shelves and the research corner
+      D('server1', 'prop_server', 3.4, 22.3, 1.05, 0.4, 1.3),
+      D('server2', 'prop_server', 4.8, 22.3, 1.05, 0.4, 1.3),
+      D('server3', 'prop_server', 18.2, 22.3, 1.05, 0.4, 1.3),
+      D('server4', 'prop_server', 19.6, 22.3, 1.05, 0.4, 1.3),
+      D('shelf3', 'prop_bookshelf', 8.4, 22.3, 1.05, 0.5, 1.5),
+      D('shelf4', 'prop_bookshelf', 13.6, 22.3, 1.05, 0.5, 1.5),
+      D('plant_s1', 'prop_plant_small', 9.9, 22.2, 0.4, 0.25, 0.9),
+      D('plant_s2', 'prop_plant_small', 12.1, 22.2, 0.4, 0.25, 0.9),
+
+      // Small plants beside the desks, big ones in the corners
+      D('plant_d1', 'prop_plant_small', 8.5, 8.0, 0.4, 0.25, 0.9),
+      D('plant_d2', 'prop_plant_small', 13.5, 8.0, 0.4, 0.25, 0.9),
+      D('plant_d3', 'prop_plant_small', 8.5, 13.5, 0.4, 0.25, 0.9),
+      D('plant_d4', 'prop_plant_small', 13.5, 13.5, 0.4, 0.25, 0.9),
+      D('ficus1', 'prop_ficus', 2.0, 3.6, 1.0, 0.35, 1.5, 'Ficus Tree'),
+      D('ficus2', 'prop_ficus', 21.9, 1.9, 1.0, 0.35, 1.5, 'Ficus Tree'),
+      D('ficus3', 'prop_ficus', 1.9, 22.3, 1.0, 0.35, 1.5, 'Ficus Tree'),
+      D('ficus4', 'prop_ficus', 21.8, 22.0, 1.0, 0.35, 1.5, 'Ficus Tree')
+    ];
+
+    // What the furniture does: press E next to it (or click it in the top view).
+    // [title, action, what happens]. Everything not listed here is just decoration.
+    const ACTS = {
+      board: ['📋 PLANNING BOARD', 'jobs', 'SEE ALL JOBS AND THEIR PROGRESS'],
+      table: ['🗣 MEETING TABLE', 'chat', 'OPEN THE TEAM CHAT'],
+      shelf: ['📚 BOOKSHELF', 'library', 'BROWSE EVERYTHING THE TEAM BUILT'],
+      cabinet: ['🗄 FILING CABINET', 'assign', 'FILE A NEW JOB'],
+      server: ['🖥 SERVER RACK', 'models', 'CHOOSE OR DOWNLOAD LOCAL MODELS'],
+      printer: ['🖨 PRINTER', 'print', 'SAVE A REPORT OF JOBS AND CHAT'],
+      lamp: ['💡 FLOOR LAMP', 'lights', 'SWITCH THE ROOM LIGHTS ON OR OFF'],
+      ficus: ['🪴 FICUS', 'water', 'WATER IT: FILLS ALL TOKEN BARS'],
+      couch: ['🛋 LEATHER SOFA', 'settings', 'API KEYS AND SETTINGS'],
+      cooler: ['💧 WATER COOLER', 'share', 'PHONE LINK AND TELEGRAM'],
+      bin: ['🗑 RECYCLING BIN', 'bin', 'EMPTY CHAT AND JOBS']
+    };
+    for (const s of this.sprites) {
+      const key = s.id.replace(/[0-9]+$/, '').replace(/^lamp_.*/, 'lamp');
+      const a = ACTS[key];
+      if (a) Object.assign(s, { title: a[0], act: a[1], hint: a[2], decor: false });
+    }
+
+    // Rugs on the floor (the desks get a rug in their agent's colour automatically)
+    this.decorRugs = [
+      { x: 11.0, y: 11.4, hw: 2.3, hh: 1.9, fill: [34, 54, 92], edge: [58, 84, 128] },     // meeting corner
+      { x: 20.3, y: 5.2, hw: 2.0, hh: 2.2, fill: [84, 34, 40], edge: [126, 66, 58] },      // lounge
+      { x: 11.0, y: 3.9, hw: 1.7, hh: 0.8, fill: [24, 30, 44], edge: [52, 62, 84] },       // entrance mat
+      { x: 11.0, y: 21.6, hw: 3.6, hh: 0.9, fill: [32, 48, 44], edge: [64, 96, 84] }       // reading spot
     ];
   }
 
@@ -284,7 +362,15 @@ export class Workroom3DEngine {
     const mapX = Math.floor(x);
     const mapY = Math.floor(y);
     if (mapX < 0 || mapX >= this.mapWidth || mapY < 0 || mapY >= this.mapHeight) return true;
-    return this.map[mapY][mapX] > 0;
+    if (this.map[mapY][mapX] > 0) return true;
+    // desks, tables, shelves and machines take up room; you walk around them
+    for (const s of this.sprites) {
+      if (!s.r) continue;
+      const dx = x - s.x;
+      const dy = y - s.y;
+      if (dx * dx + dy * dy < s.r * s.r) return true;
+    }
+    return false;
   }
 
   checkProximity() {
@@ -292,6 +378,7 @@ export class Workroom3DEngine {
     let minDist = 2.6;
 
     for (const s of this.sprites) {
+      if (s.decor) continue;
       const dist = Math.hypot(this.player.x - s.x, this.player.y - s.y);
       if (dist < minDist) {
         minDist = dist;
@@ -306,18 +393,21 @@ export class Workroom3DEngine {
     if (!this.nearInteractable) return;
     const item = this.nearInteractable;
 
+    // furniture with a job to do (planning board, shelf, printer, lamp, ...)
+    if (item.act) {
+      audioSynth.playBleep();
+      window.workroomApp?.runAction(item.act, item);
+      return;
+    }
+
     if (item.type === 'agent') {
       window.workroomApp?.openMonitorCockpit(item.agentId);
       audioSynth.playBleep();
     } else if (item.type === 'coffee_bar') {
-      // Boost coffee and energy for all agents!
-      Object.values(this.state.agents).forEach(a => {
-        a.coffeeCups++;
-        a.energy = Math.min(100, a.energy + 10);
-      });
+      // (the token bars are real usage now, so a coffee no longer changes them)
       window.workroomApp?.sendWebSocketAction({
         type: 'broadcast',
-        text: '☕ Fresh batch of artisan espresso brewed at the coffee bar! Energy replenished.',
+        text: '☕ Fresh batch of artisan espresso brewed at the coffee bar!',
         sender: 'player'
       });
       audioSynth.playChime();
@@ -336,6 +426,13 @@ export class Workroom3DEngine {
         sender: 'player'
       });
     }
+  }
+
+  // Floor lamps switch the lights: dark room, glowing screens
+  toggleLights() {
+    this.lightsOn = !this.lightsOn;
+    setLightLevel(this.lightsOn ? 1 : 0.38);
+    return this.lightsOn;
   }
 
   setViewMode(mode) {
@@ -365,6 +462,7 @@ export class Workroom3DEngine {
     let best = null;
     let bestD = 0.9;
     for (const s of this.sprites) {
+      if (s.decor) continue;
       const pos = this.spriteTopPos(s);
       const d = Math.hypot(pos.x - wx, pos.y - wy);
       if (d < bestD) { bestD = d; best = s; }
@@ -374,11 +472,9 @@ export class Workroom3DEngine {
   }
 
   // Agents move in shared state; use their live position when available
+  // Desks stand where the room puts them (the saved agent position is only a leftover from older versions
+  // and would draw the top view differently from the first-person view).
   spriteTopPos(s) {
-    if (s.type === 'agent') {
-      const a = this.state.agents?.[s.agentId];
-      if (a) return { x: a.pos.x, y: a.pos.z };
-    }
     return { x: s.x, y: s.y };
   }
 
@@ -440,12 +536,29 @@ export class Workroom3DEngine {
     }
     ctx.restore();
 
-    // Soft drop shadows under props
+    // Floor rugs (meeting corner, lounge, entrance, reading spot)
+    for (const r of this.decorRugs || []) {
+      const rx = ox + (r.x - r.hw) * tile;
+      const ry = oy + (r.y - r.hh) * tile;
+      ctx.fillStyle = `rgb(${r.fill.join(',')})`;
+      ctx.beginPath();
+      ctx.roundRect(rx, ry, r.hw * 2 * tile, r.hh * 2 * tile, tile * 0.35);
+      ctx.fill();
+      ctx.strokeStyle = `rgb(${r.edge.join(',')})`;
+      ctx.lineWidth = Math.max(1, tile * 0.12);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(${r.edge.join(',')},0.35)`;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rx + tile * 0.4, ry + tile * 0.4, r.hw * 2 * tile - tile * 0.8, r.hh * 2 * tile - tile * 0.8);
+    }
+
+    // Soft drop shadows under props, sized to each piece of furniture
     for (const s of this.sprites) {
       const pos = this.spriteTopPos(s);
+      const reach = tile * (s.icon || 1.8);
       ctx.fillStyle = 'rgba(0,0,0,0.35)';
       ctx.beginPath();
-      ctx.ellipse(ox + pos.x * tile + tile * 0.15, oy + pos.y * tile + tile * 0.5, tile * 0.9, tile * 0.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(ox + pos.x * tile + tile * 0.1, oy + pos.y * tile + reach * 0.18, reach * 0.48, reach * 0.3, 0, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -455,7 +568,9 @@ export class Workroom3DEngine {
       const a = this.state.agents?.[s.agentId];
       const pos = this.spriteTopPos(s);
       ctx.fillStyle = (a?.color || '#94a3b8') + '33';
-      ctx.fillRect(ox + (pos.x - 1.5) * tile, oy + (pos.y - 1) * tile, tile * 3, tile * 2);
+      ctx.beginPath();
+      ctx.roundRect(ox + (pos.x - 2.1) * tile, oy + (pos.y - 1.5) * tile, tile * 4.2, tile * 3, tile * 0.3);
+      ctx.fill();
     }
 
     // Props & agents
@@ -464,8 +579,14 @@ export class Workroom3DEngine {
       const cx = ox + pos.x * tile;
       const cy = oy + pos.y * tile;
       const img = this.assets.getSprite(s.spriteId);
-      const size = tile * 1.8;
-      if (img) ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+      // keep the picture's own proportions; "icon" is the longest side in tiles
+      if (img) {
+        const side = tile * (s.icon || 1.8);
+        const aspect = img.width / img.height;
+        const iw = aspect >= 1 ? side : side * aspect;
+        const ih = aspect >= 1 ? side / aspect : side;
+        ctx.drawImage(img, cx - iw / 2, cy - ih / 2, iw, ih);
+      }
 
       if (s.type === 'agent') {
         const a = this.state.agents?.[s.agentId];
@@ -533,7 +654,7 @@ export class Workroom3DEngine {
     if (this.hover?.kind === 'sprite') {
       const s = this.hover.sprite;
       const a = s.type === 'agent' ? this.state.agents?.[s.agentId] : null;
-      const text = a ? `${a.name} — ${a.status}  [click: open monitor]` : `${s.title || s.type}  [click: interact]`;
+      const text = a ? `${a.name} — ${a.status}  [click: open monitor]` : `${s.title || s.type}  [click: ${s.hint ? s.hint.toLowerCase() : 'interact'}]`;
       ctx.font = `bold ${Math.max(9, tile * 0.6)}px monospace`;
       ctx.textAlign = 'left';
       const w = ctx.measureText(text).width + 10;
@@ -749,22 +870,27 @@ export class Workroom3DEngine {
 
       if (transformY <= 0.1) continue;
 
+      const img = this.assets.getSprite(sprite.spriteId);
+      if (!img) continue;
+
       const spriteScreenX = Math.floor((width / 2) * (1 + transformX / transformY));
-      const spriteHeight = Math.abs(Math.floor(height / transformY));
-      const spriteWidth = Math.abs(Math.floor(height / transformY));
+      // Real proportions: the height is given in wall units, the width follows the picture, and the
+      // feet stand on the floor (before, everything was squeezed into a square and sat below the floor).
+      const unit = height / transformY;                        // one wall unit on screen
+      const spriteHeight = Math.max(1, Math.floor(unit * (sprite.h ?? 1)));
+      const spriteWidth = Math.max(1, Math.floor(spriteHeight * (img.width / img.height)));
+      const floorY = Math.floor(height / 2 + unit / 2);        // where the floor is at this distance
+      const top = floorY - spriteHeight;
+      const left = Math.floor(spriteScreenX - spriteWidth / 2);
 
-      const drawStartY = Math.max(0, Math.floor(-spriteHeight / 2 + height / 2 + spriteHeight * 0.15));
-      const drawEndY = Math.min(height - 1, Math.floor(spriteHeight / 2 + height / 2 + spriteHeight * 0.15));
+      const drawStartX = Math.max(0, left);
+      const drawEndX = Math.min(width, left + spriteWidth);
+      if (drawEndX <= drawStartX || top > height || floorY < 0) continue;
+      if (spriteWidth > 1600 || spriteHeight > 1600) continue;  // so close that it would fill the screen
 
-      const drawStartX = Math.max(0, Math.floor(-spriteWidth / 2 + spriteScreenX));
-      const drawEndX = Math.min(width - 1, Math.floor(spriteWidth / 2 + spriteScreenX));
-
-      const spriteImg = this.assets.getSprite(sprite.spriteId);
-      if (!spriteImg) continue;
-
+      const drawStartY = top;
       const w = drawEndX - drawStartX;
-      const h = drawEndY - drawStartY;
-      if (w <= 0 || h <= 0) continue;
+      const h = spriteHeight;
 
       // agents breathe a little while they work
       const agent = sprite.type === 'agent' ? this.state.agents?.[sprite.agentId] : null;
@@ -776,20 +902,20 @@ export class Workroom3DEngine {
       if (centerVisible) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
         ctx.beginPath();
-        ctx.ellipse(spriteScreenX, drawEndY - h * 0.02, w * 0.4, Math.max(2, h * 0.055), 0, 0, Math.PI * 2);
+        ctx.ellipse(spriteScreenX, floorY - h * 0.01, spriteWidth * 0.46, Math.max(2, unit * 0.07), 0, 0, Math.PI * 2);
         ctx.fill();
       }
 
       // soft glow from an agent's monitor, in their colour
       if (agent && centerVisible) {
-        const gy = drawStartY + h * 0.45;
-        const g = ctx.createRadialGradient(spriteScreenX, gy, 0, spriteScreenX, gy, w * 0.9);
+        const gy = top + h * 0.45;
+        const g = ctx.createRadialGradient(spriteScreenX, gy, 0, spriteScreenX, gy, spriteWidth * 0.9);
         g.addColorStop(0, (agent.color || '#38bdf8') + '55');
         g.addColorStop(1, (agent.color || '#38bdf8') + '00');
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
         ctx.fillStyle = g;
-        ctx.fillRect(spriteScreenX - w, gy - w, w * 2, w * 2);
+        ctx.fillRect(spriteScreenX - spriteWidth, gy - spriteWidth, spriteWidth * 2, spriteWidth * 2);
         ctx.restore();
       }
 
@@ -801,18 +927,18 @@ export class Workroom3DEngine {
       }
       const tctx = tmp.getContext('2d');
       tctx.imageSmoothingEnabled = false;
-      tctx.clearRect(0, 0, tmp.width, tmp.height);
+      tctx.clearRect(0, 0, w, h);
       for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
         if (transformY >= this.zBuffer[stripe]) continue;
-        const texX = Math.floor(((stripe - (-spriteWidth / 2 + spriteScreenX)) * spriteImg.width) / spriteWidth);
-        tctx.drawImage(spriteImg, texX, 0, 1, spriteImg.height, stripe - drawStartX, 0, 1, h);
+        const texX = Math.min(img.width - 1, Math.floor(((stripe - left) * img.width) / spriteWidth));
+        tctx.drawImage(img, texX, 0, 1, img.height, stripe - drawStartX, 0, 1, h);
       }
       const lit = Math.min(1, lightAt(sprite.x, sprite.y) * Math.max(0.35, 1 - transformY * 0.03));
       tctx.globalCompositeOperation = 'source-atop';
       tctx.fillStyle = `rgba(6, 9, 20, ${Math.max(0, 0.62 - lit * 0.5).toFixed(3)})`;
       tctx.fillRect(0, 0, w, h);
       tctx.globalCompositeOperation = 'source-over';
-      ctx.drawImage(tmp, 0, 0, w, h, drawStartX, drawStartY + bob, w, h);
+      ctx.drawImage(tmp, 0, 0, w, h, drawStartX, top + bob, w, h);
 
       // 3D Status Banner for Agents
       if (sprite.type === 'agent' && transformY < 14) {
@@ -857,13 +983,17 @@ export class Workroom3DEngine {
     const bannerW = Math.min(width - 30, 320);
     const bannerH = 34;
     const bannerX = (width - bannerW) / 2;
-    const bannerY = height - bannerH - 12;
+    const bannerY = Math.floor(height * 0.76) - bannerH;   // above the help bar, which sits over the bottom of the picture
 
     let title = '';
     let subtitle = '';
     let color = '#38bdf8';
 
-    if (item.type === 'agent') {
+    if (item.act) {
+      title = item.title;
+      subtitle = `[E] ${item.hint}`;
+      color = '#22d3ee';
+    } else if (item.type === 'agent') {
       const agent = this.state.agents[item.agentId];
       color = agent?.color || '#38bdf8';
       title = `${agent?.name?.toUpperCase()} // ${agent?.role?.toUpperCase()}`;
@@ -930,9 +1060,10 @@ export class Workroom3DEngine {
     }
 
     // Agent Blips
-    for (const a of Object.values(this.state.agents)) {
-      ctx.fillStyle = a.color || '#f43f5e';
-      ctx.fillRect(startX + a.pos.x * scale - 1, startY + a.pos.z * scale - 1, 3.5, 3.5);
+    for (const s of this.sprites) {
+      if (s.type !== 'agent') continue;
+      ctx.fillStyle = this.state.agents?.[s.agentId]?.color || '#f43f5e';
+      ctx.fillRect(startX + s.x * scale - 1, startY + s.y * scale - 1, 3.5, 3.5);
     }
 
     // Player

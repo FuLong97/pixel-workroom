@@ -50,13 +50,6 @@ async function run() {
       });
       break;
     }
-    case 'sprint': {
-      const feature = args.join(' ') || 'Retro Pixel Arcade Engine';
-      console.log(`🚀 Triggering collaborative sprint: "${feature}"...`);
-      agentCoordinator.triggerSprint(feature);
-      console.log('Sprint initiated! Alice, Bob, Charlie, Diana, and Echo are coordinating over MCP.');
-      break;
-    }
     case 'task': {
       const agentId = args[0] || 'alice';
       const title = args[1] || 'Optimize rendering pipeline';
@@ -102,7 +95,6 @@ Commands:
   broadcast <text>           Send an intercom broadcast to all agents
   send <agent> <text>        Send a direct message to an agent over MCP
   whiteboard                 View the central office whiteboard
-  sprint [feature_name]      Trigger an autonomous multi-agent sprint
 `);
     }
   }

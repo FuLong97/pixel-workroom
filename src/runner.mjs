@@ -14,13 +14,37 @@ import { detectLocal, pickToolModel } from './local.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const WORKSPACE = process.env.WORKROOM_WORKSPACE || path.join(__dirname, '..', 'workspace');
 
+// Team mode is orchestrated: Alice (the strongest model) writes the plan and splits the work into
+// one section per worker; the workers (cheaper models) each do only their own section. The expensive
+// model writes a few lines, the cheap ones do the bulk, so quality stays high and token use stays low.
+const SECTION = (name) => `Read PLAN.md first and do ONLY the section titled "## ${name}". Follow the shared rules at the top of the plan; do not redo other people's work.`;
 const ROLES = {
-  alice: { label: 'Plan', category: 'Core', mustWrite: true, prompt: (g) => `You are Alice, systems architect. Goal: "${g}". Write a SHORT PLAN.md (max 25 lines): file list, features, how it runs in a browser with no build step. Do not write any other file.` },
-  bob: { label: 'Build', category: 'Frontend', mustWrite: true, prompt: (g, team) => `You are Bob, frontend engineer. Goal: "${g}". ${team ? 'Follow PLAN.md. ' : ''}Build it as a working, self-contained browser app: index.html plus optional style.css/app.js, no external build step, no network dependencies. Keep it compact and polished. Open-ready: index.html must run by double-clicking. It MUST also work on an iPhone (Safari): include <meta name="viewport" content="width=device-width, initial-scale=1">, a responsive layout, touch controls for any game (on-screen buttons or swipe, no keyboard-only input), tap targets of at least 44px, and no hover-only features.` },
-  charlie: { label: 'Logic', category: 'Backend', prompt: (g) => `You are Charlie, logic/backend engineer. Goal: "${g}". Review the existing files and improve the core logic and state handling (persistence via localStorage if useful, no bugs, clean structure). Edit existing files; do not rewrite from scratch.` },
-  diana: { label: 'Test', category: 'QA', prompt: (g) => `You are Diana, QA auditor. Goal: "${g}". Read the code carefully, find real bugs or broken flows, and fix them with minimal edits. Do not add features.` },
-  echo: { label: 'Docs', category: 'Research', mustWrite: true, prompt: (g) => `You are Echo, documentation specialist. Goal: "${g}". Write a concise README.md (what it is, how to open it, controls). Do not change code.` }
+  alice: { label: 'Plan', category: 'Core', mustWrite: true, tier: ['CLAUDE_PLAN_MODEL', 'opus'], prompt: (g) => `You are Alice, the lead who orchestrates a team of cheaper workers. Goal: "${g}". Write ONE file, PLAN.md (max 45 lines): (1) a short product description and the exact file list (index.html plus optional style.css/app.js, no build step, no network); (2) shared rules the workers must all follow (ids, function names, CSS classes, data shapes); (3) four sections titled exactly "## Bob", "## Charlie", "## Diana", "## Echo", each with 3-6 concrete checklist items for that worker. Bob builds all the files. Charlie improves logic, state and persistence. Diana finds and fixes real bugs. Echo writes README.md. Write nothing except PLAN.md.` },
+  bob: { label: 'Build', category: 'Frontend', mustWrite: true, tier: ['CLAUDE_RUN_MODEL', 'sonnet'], prompt: (g, team) => `You are Bob, frontend engineer. Goal: "${g}". ${team ? SECTION('Bob') + ' ' : ''}Build it as a working, self-contained browser app: index.html plus optional style.css/app.js, no external build step, no network dependencies. Keep it compact and polished. Open-ready: index.html must run by double-clicking. It MUST also work on an iPhone (Safari): include <meta name="viewport" content="width=device-width, initial-scale=1">, a responsive layout, touch controls for any game (on-screen buttons or swipe, no keyboard-only input), tap targets of at least 44px, and no hover-only features.` },
+  charlie: { label: 'Logic', category: 'Backend', tier: ['CLAUDE_CHECK_MODEL', 'haiku'], prompt: (g) => `You are Charlie, logic/backend engineer. Goal: "${g}". ${SECTION('Charlie')} Review the existing files and improve the core logic and state handling (persistence via localStorage if useful, no bugs, clean structure). Edit existing files; do not rewrite from scratch.` },
+  diana: { label: 'Test', category: 'QA', tier: ['CLAUDE_CHECK_MODEL', 'haiku'], prompt: (g) => `You are Diana, QA auditor. Goal: "${g}". ${SECTION('Diana')} Read the code carefully, find real bugs or broken flows, and fix them with minimal edits. Do not add features.` },
+  echo: { label: 'Docs', category: 'Research', mustWrite: true, tier: ['CLAUDE_CHECK_MODEL', 'haiku'], prompt: (g) => `You are Echo, documentation specialist. Goal: "${g}". ${SECTION('Echo')} Write a concise README.md (what it is, how to open it, controls). Do not change code.` }
 };
+
+// One readable line for a tool call. Shell commands are shown in full, because that is what
+// people want to check. In Claude runs only file tools are allowed, so a shell attempt is marked as blocked.
+export function describeTool(call) {
+  const i = call.input || {};
+  if (/^(bash|shell|powershell|exec|run_command)$/i.test(call.name || '')) {
+    const cmd = String(i.command ?? i.cmd ?? JSON.stringify(i)).replace(/\s+$/, '').slice(0, 2000);
+    return `$ ${cmd}  (blocked: this runner only allows file tools)`;
+  }
+  const where = i.file_path ? path.basename(i.file_path) : i.path || i.pattern || '';
+  return `${call.name} ${where}`.trim();
+}
+
+// Which Claude model does this step use? Solo and ORCHESTRATE=0 use one model for everything.
+function modelFor(agent, team) {
+  const single = process.env.CLAUDE_RUN_MODEL || 'sonnet';
+  if (!team || process.env.ORCHESTRATE === '0') return single;
+  const [envName, fallback] = ROLES[agent].tier;
+  return process.env[envName] || fallback;
+}
 
 const COOLDOWN_MS = (parseFloat(process.env.BACKEND_COOLDOWN_MIN) || 30) * 60 * 1000;
 export const MAX_QUEUE = 5;        // goals waiting in total
@@ -63,6 +87,38 @@ class Runner extends EventEmitter {
     this.via = null;
     // keep the last project folder so the next goal can opt in to improving it
     this.dir = this.dir || null;
+  }
+
+  // What the browser needs to draw the progress bar (no file listing: that is slow)
+  lite() {
+    return {
+      running: this.running,
+      goal: this.goal,
+      mode: this.mode,
+      dir: this.dir,
+      owner: this.job?.owner ?? null,
+      via: this.via,
+      resting: [...this.cooldown].filter(([, t]) => t > Date.now()).map(([k, t]) => ({ backend: k, until: t })),
+      queue: this.queue.map((j) => ({ id: j.id, goal: j.goal, mode: j.mode, owner: j.owner })),
+      steps: this.steps,
+      current: this.current,
+      error: this.error
+    };
+  }
+
+  // Push progress to every open browser the moment it changes (throttled to 4 per second)
+  pushRun(force = false) {
+    const now = Date.now();
+    if (!force && now - (this.lastRunPush || 0) < 250) return;
+    this.lastRunPush = now;
+    stateManager.emit('state_change', { type: 'run_update', data: force ? this.status() : this.lite() });
+  }
+
+  pushTask(task, force = false) {
+    const now = Date.now();
+    if (!force && now - (task.lastPush || 0) < 250) return;
+    task.lastPush = now;
+    stateManager.emit('state_change', { type: 'task_update', data: { id: task.id, progress: task.progress, status: task.status } });
   }
 
   status() {
@@ -162,10 +218,11 @@ class Runner extends EventEmitter {
     this.running = true;
     this.goal = goal;
     this.mode = mode;
-    this.steps = MODE_STEPS[this.mode].map((id) => ({ agent: id, label: ROLES[id].label, status: 'PENDING' }));
+    this.steps = MODE_STEPS[this.mode].map((id) => ({ agent: id, label: ROLES[id].label, status: 'PENDING', model: modelFor(id, this.mode === 'team') }));
 
-    stateManager.stats.activeSprint = goal;
-    stateManager.broadcast(`🎯 New goal: "${goal}" (${this.mode === 'team' ? 'full team' : 'solo: Bob'})`, 'lead');
+    stateManager.stats.activeGoal = goal;
+    stateManager.broadcast(`🎯 New goal: "${goal}" (${this.mode === 'team' ? 'full team' : 'solo: Bob'})`, 'system');
+    this.pushRun(true);
     this.emit('started', { id: job.id, owner: job.owner, goal, mode, dir, wasQueued: job.wasQueued });
     this.loop().catch((e) => this.fail(e.message));
   }
@@ -192,7 +249,8 @@ class Runner extends EventEmitter {
     this.running = false;
     const step = this.steps[this.current];
     if (step) step.status = 'FAILED';
-    stateManager.broadcast(`⚠️ Run stopped: ${msg}`, 'lead');
+    this.pushRun(true);
+    stateManager.broadcast(`⚠️ Run stopped: ${msg}`, 'system');
     this.finishJob(msg);
   }
 
@@ -202,14 +260,16 @@ class Runner extends EventEmitter {
       this.current = i;
       const step = this.steps[i];
       step.status = 'RUNNING';
+      this.pushRun(true);
       const ok = await this.runStep(step);
       if (!ok) return;
       step.status = 'DONE';
+      this.pushRun(true);
       this.emit('step', { owner: this.job?.owner, goal: this.goal, done: i + 1, total: this.steps.length, agent: step.agent, label: step.label });
     }
     this.running = false;
     this.current = this.steps.length;
-    stateManager.broadcast(`✅ Goal finished. Open the result from the goal bar. Files: ${this.listFiles().join(', ') || 'none'}`, 'lead');
+    stateManager.broadcast(`✅ Goal finished. Open the result from the goal bar. Files: ${this.listFiles().join(', ') || 'none'}`, 'system');
     stateManager.saveStateToFile();
     this.finishJob(null);
   }
@@ -266,7 +326,7 @@ class Runner extends EventEmitter {
       if (previous) {
         const msg = `${backendName(previous)} is out of tokens, continuing with ${backendName(kind)}.`;
         this.push(agent, msg);
-        stateManager.broadcast(`🔁 ${msg}`, 'lead');
+        stateManager.broadcast(`🔁 ${msg}`, 'system');
         this.emit('fallback', { owner: this.job?.owner, goal: this.goal, from: previous, to: kind });
         previous = null;
       }
@@ -280,6 +340,8 @@ class Runner extends EventEmitter {
         this.push(agent, `Using local model ${opts.model} (free, but slower and less capable)`);
       }
       this.via = kind;
+      this.pushRun();
+      opts.model = opts.model || step.model;
       const r = await this.execBackend(kind, target, step, agent, task, prompt, opts);
       if (r.ok && role.mustWrite && !this.changedSince(before)) {
         // exit code 0 is not enough: small models sometimes "describe" the code without writing any file
@@ -319,6 +381,7 @@ class Runner extends EventEmitter {
   finishStep(agent, task, ok) {
     task.status = ok ? 'DONE' : 'BLOCKED';
     if (ok) task.progress = 100;
+    this.pushTask(task, true);
     agent.state = 'IDLE';
     agent.currentTask = 'Idle — Awaiting instructions from lead';
     agent.status = ok ? 'Finished my part' : 'Stopped';
@@ -366,9 +429,10 @@ class Runner extends EventEmitter {
                 agent.screen.lines = (inp.content || inp.new_string || '').split('\n').slice(0, 40);
                 this.push(agent, `${c.name} ${file}`);
               } else {
-                this.push(agent, `${c.name} ${file || inp.pattern || ''}`.trim());
+                this.push(agent, describeTool(c));
               }
               task.progress = Math.min(90, (task.progress || 10) + 8);
+              this.pushTask(task);
             }
           }
           this.refreshAgent(agent);
@@ -387,12 +451,23 @@ class Runner extends EventEmitter {
         }
       };
 
+      let afterExec = false;
+      const COMMAND_LINE = /^(\$ |> |exec\b|bash\b|sh -c|powershell|pwsh|cmd(\.exe)?\b|node |npm |npx |git |python)/i;
       const handleText = (line) => {
+        // Codex prints "exec" and then the command it runs; other CLIs print the command directly.
+        // Commands go to the terminal log in full.
+        if (afterExec || COMMAND_LINE.test(line)) {
+          if (!/^exec$/i.test(line)) {
+            this.push(agent, line.startsWith('$') ? line : '$ ' + line.replace(/^exec\s+/i, ''));
+          }
+        }
+        afterExec = /^exec$/i.test(line);
         lines.push(line);
         if (lines.length > 40) lines.shift();
         agent.screen.lines = lines.slice(-30);
         agent.screen.thoughts = line.slice(0, 280);
         task.progress = Math.min(90, (task.progress || 10) + 1);
+        this.pushTask(task);
         this.refreshAgent(agent);
       };
 
@@ -436,3 +511,4 @@ class Runner extends EventEmitter {
 }
 
 export const runner = new Runner();
+

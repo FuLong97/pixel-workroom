@@ -58,6 +58,11 @@
     <div class="crt-overlay"></div>
 
     <!-- Goal dock: type an idea, get a working result -->
+    <!-- Shown when the code on disk is newer than the running server -->
+    <div id="stale-banner" class="hidden absolute top-0 left-0 right-0 z-40 bg-amber-500 text-slate-950 text-xs font-semibold px-4 py-2 text-center shadow-lg">
+      ⚠️ This server is still running <u>old code</u>. Close its window and double-click <code class="bg-amber-300/60 px-1 rounded">start.bat</code> again, then reload this page.
+    </div>
+
     <div id="goal-dock" class="absolute top-3 left-1/2 -translate-x-1/2 w-[min(640px,92%)] z-20 bg-slate-900/90 backdrop-blur border border-cyan-700/60 rounded-lg px-3 py-2.5 shadow-xl"></div>
 
     <!-- Bottom Instructions Overlay -->
@@ -170,6 +175,8 @@
           <button class="tab-btn px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-400" data-tab="whiteboard">📋 Whiteboard</button>
           <button class="tab-btn px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-400" data-tab="agents">👥 Agents</button>
           <button class="tab-btn px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-400" data-tab="protocol">🔌 Protocol</button>
+          <button class="tab-btn px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-400" data-tab="models">🧠 Models</button>
+          <button class="tab-btn px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-400" data-tab="library">📚 Library</button>
           <button class="tab-btn px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-400" data-tab="apikeys">⚙️ API Keys</button>
           <button id="btn-close-intercom" class="ml-2 px-2 py-0.5 rounded bg-rose-900/80 hover:bg-rose-700 text-rose-200 text-xs">✕</button>
         </div>
@@ -235,13 +242,10 @@
         <!-- Tab 3: Whiteboard Kanban -->
         <div id="tab-whiteboard" class="tab-pane hidden">
           <div class="text-xs text-slate-400 mb-3 flex flex-wrap justify-between items-center gap-2">
-            <span>Central Sprint Task Roadmap & Progress</span>
+            <span>Jobs & live progress</span>
             <div class="flex items-center space-x-2">
               <button id="btn-clear-jobs" class="px-2.5 py-1 bg-slate-800 hover:bg-rose-900 text-slate-300 hover:text-white rounded text-xs border border-slate-700">
                 🗑️ Clear Demo Jobs (Fresh Start)
-              </button>
-              <button id="btn-sprint" class="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded font-semibold text-xs shadow">
-                🚀 Trigger Collaborative Sprint
               </button>
             </div>
           </div>
@@ -261,6 +265,16 @@
         </div>
 
         <!-- Tab 6: API Keys Configuration -->
+        <!-- Local models: choose which one answers, download new ones -->
+        <div id="tab-models" class="tab-pane hidden">
+          <div id="models-body" class="text-xs text-slate-300">Looking for a local model server...</div>
+        </div>
+
+        <!-- Everything the team has built so far -->
+        <div id="tab-library" class="tab-pane hidden">
+          <div id="library-body" class="text-xs text-slate-300">Loading your projects...</div>
+        </div>
+
         <div id="tab-apikeys" class="tab-pane hidden">
           <div class="text-xs text-slate-400 mb-3">Connect your live API keys to power the agents (leave blank to use free local simulation):</div>
           <div id="local-status" class="mb-3 p-3 rounded-lg border border-slate-800 bg-slate-950 text-xs text-slate-300">Checking for a local model (Ollama / LM Studio)...</div>
@@ -294,6 +308,20 @@
         <span>Stdio & WebSockets Active</span>
       </div>
 
+    </div>
+  </div>
+
+  <!-- Short messages ("Lights off", "Report saved") -->
+  <div id="toast" class="hidden fixed bottom-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-slate-900/95 border border-cyan-500/60 text-xs text-slate-100 shadow-xl pointer-events-none"></div>
+
+  <!-- Small information window used by the things you can use in the room -->
+  <div id="info-modal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="w-full max-w-md bg-slate-900 border border-cyan-500/70 rounded-2xl shadow-2xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <div id="info-title" class="font-bold text-cyan-300 text-sm"></div>
+        <button id="info-close" class="px-2 py-0.5 rounded bg-rose-900/80 hover:bg-rose-700 text-rose-100 text-xs">✕</button>
+      </div>
+      <div id="info-body" class="text-xs text-slate-200 space-y-2"></div>
     </div>
   </div>
 

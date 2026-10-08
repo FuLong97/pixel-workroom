@@ -1,5 +1,7 @@
 // Goal runner + token budget tests (no real API calls, no tokens spent)
 import './setup.mjs';
+import fs from 'fs';
+import os from 'os';
 import assert from 'assert';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -71,6 +73,68 @@ runner.submit({ goal: 'q six', owner: 'c' });
 await wait(() => !runner.running && runner.queue.length === 0, 30000);
 assert.deepStrictEqual(order, ['q one', 'q five', 'q six'], 'runs in submit order, cancelled goals never run');
 console.log('  ✓');
+
+console.log('▶ Orchestration: the strongest model plans, a mid model builds, cheap models check');
+const argsLog = path.join(os.tmpdir(), `orch-${Date.now()}.log`);
+process.env.ARGS_LOG = argsLog;
+const runs = () => fs.readFileSync(argsLog, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+const modelOf = (a) => a[a.indexOf('--model') + 1];
+const promptOf = (a) => a[a.indexOf('-p') + 1];
+const idle = () => wait(() => !runner.running && runner.queue.length === 0, 30000);
+
+assert(runner.submit({ goal: 'orchestrated app', mode: 'team', owner: 'o' }).ok);
+await idle();
+let rs = runs();
+assert.deepStrictEqual(rs.map(modelOf), ['opus', 'sonnet', 'haiku', 'haiku', 'haiku']);
+assert(promptOf(rs[0]).includes('## Bob') && promptOf(rs[0]).includes('## Charlie') && promptOf(rs[0]).includes('## Echo'), 'the plan asks for one section per worker');
+assert(promptOf(rs[1]).includes('ONLY the section titled "## Bob"'), 'workers only do their own section');
+assert(promptOf(rs[3]).includes('"## Diana"') && promptOf(rs[4]).includes('"## Echo"'));
+assert.deepStrictEqual(runner.status().steps.map((s) => s.model), ['opus', 'sonnet', 'haiku', 'haiku', 'haiku'], 'the UI can show each step\'s model');
+console.log('  ✓ opus plans, sonnet builds, haiku checks');
+
+fs.writeFileSync(argsLog, '');
+process.env.ORCHESTRATE = '0';
+assert(runner.submit({ goal: 'single model app', mode: 'team', owner: 'o' }).ok);
+await idle();
+assert.deepStrictEqual(runs().map(modelOf), ['sonnet', 'sonnet', 'sonnet', 'sonnet', 'sonnet'], 'ORCHESTRATE=0 uses one model');
+delete process.env.ORCHESTRATE;
+
+fs.writeFileSync(argsLog, '');
+process.env.CLAUDE_PLAN_MODEL = 'sonnet';
+process.env.CLAUDE_CHECK_MODEL = 'opus';
+assert(runner.submit({ goal: 'custom tiers app', mode: 'team', owner: 'o' }).ok);
+await idle();
+assert.deepStrictEqual(runs().map(modelOf), ['sonnet', 'sonnet', 'opus', 'opus', 'opus'], 'tiers can be overridden');
+delete process.env.CLAUDE_PLAN_MODEL;
+delete process.env.CLAUDE_CHECK_MODEL;
+
+fs.writeFileSync(argsLog, '');
+assert(runner.submit({ goal: 'solo app', mode: 'solo', owner: 'o' }).ok);
+await idle();
+assert.deepStrictEqual(runs().map(modelOf), ['sonnet'], 'solo is one builder');
+console.log('  ✓ ORCHESTRATE=0, tier overrides and solo mode');
+
+console.log('▶ Progress is pushed to the browser as it happens');
+const events = [];
+// copy at once, like the WebSocket does when it sends the message (the objects keep changing afterwards)
+stateManager.on('state_change', (c) => { if (c.type === 'task_update' || c.type === 'run_update') events.push(JSON.parse(JSON.stringify(c))); });
+assert(runner.submit({ goal: 'live progress app', mode: 'solo', owner: 'o' }).ok);
+await idle();
+const runUpdates = events.filter((e) => e.type === 'run_update');
+const firstRunning = runUpdates.findIndex((e) => e.data.steps[0]?.status === 'RUNNING');
+const firstDone = runUpdates.findIndex((e) => e.data.steps[0]?.status === 'DONE');
+assert(firstRunning >= 0 && firstDone > firstRunning, 'the step is announced as RUNNING and later as DONE, without polling');
+assert(Array.isArray(runUpdates[firstDone].data.files), 'the finished update carries the file list');
+const taskUpdates = events.filter((e) => e.type === 'task_update');
+assert(taskUpdates.length >= 2, 'the job card moves while the agent works');
+assert(taskUpdates[0].data.progress < taskUpdates.at(-1).data.progress && taskUpdates.at(-1).data.progress === 100);
+console.log('  ✓ ' + runUpdates.length + ' run updates, ' + taskUpdates.length + ' job updates');
+
+console.log('▶ A shell command an agent tries is shown in full');
+const bobLogs = stateManager.agents.bob.screen.logs.join('\n');
+assert(bobLogs.includes('$ cd site && npm run build --silent -- --flag="two words" && rm -rf tmp  (blocked'), 'full command, not just the word Bash');
+console.log('  ✓');
+
 
 console.log('▶ Budget: exhausted agent spends nothing and cache serves repeats');
 llmProvider.setBudget('echo', 400000, 400000);

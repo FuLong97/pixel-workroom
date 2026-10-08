@@ -6,7 +6,6 @@ export class AgentCoordinator {
   constructor(state = stateManager) {
     this.state = state;
     this.simulationTimer = null;
-    this.sprintInProgress = false;
     for (const a of Object.values(this.state.agents)) this.syncBudget(a);
 
     // Listen to messages addressed to agents
@@ -31,7 +30,6 @@ export class AgentCoordinator {
     if (this.simulationTimer) clearInterval(this.simulationTimer);
 
     this.simulationTimer = setInterval(() => {
-      if (this.sprintInProgress) return;
       this.tickAgentLife();
     }, intervalMs);
   }
@@ -113,6 +111,19 @@ export class AgentCoordinator {
     const agent = this.state.agents[recipient];
     if (!agent) return;
 
+    // Only people get an automatic answer. If the sender is another agent (an MCP tool, demo
+    // chatter) the message is just shown: answering it would make the
+    // two agents reply to each other forever, spending tokens on every round.
+    if (this.state.agents[String(msg.sender).toLowerCase()]) {
+      // they glance at it, then go back to what they were doing
+      setTimeout(() => {
+        if (agent.state !== 'CHATTING') return;
+        agent.state = /^Idle/.test(agent.currentTask || '') ? 'IDLE' : 'CODING';
+        this.state.emit('state_change', { type: 'agent_update', data: agent });
+      }, 1500);
+      return;
+    }
+
     // React visually: change state to THINKING
     agent.state = 'THINKING';
     agent.status = `Processing query from ${msg.sender}...`;
@@ -139,138 +150,40 @@ export class AgentCoordinator {
     }, 1000);
   }
 
+  // A message to everyone: ONE agent answers it, in turn, so a person always gets an answer but the
+  // room does not babble. Messages from agents and the room's own announcements ('system') get no answer,
+  // otherwise agents would keep answering each other.
   async handleBroadcast(msg) {
-    if (msg.sender === 'all') return;
-    // When lead sends a broadcast, an agent acknowledges
-    if (msg.sender === 'lead' || msg.sender === 'user') {
-      setTimeout(() => {
-        const acknowledgers = ['alice', 'charlie', 'bob'];
-        const responder = acknowledgers[Math.floor(Math.random() * acknowledgers.length)];
-        this.state.sendMessage(
-          'all',
-          `Acknowledged lead broadcast: "${msg.text}". Agents standing by on MCP bus.`,
-          responder
-        );
-      }, 1500);
-    }
-  }
+    const sender = String(msg.sender).toLowerCase();
+    if (sender === 'all' || sender === 'system' || this.state.agents[sender]) return;
 
-  async triggerSprint(featureName = 'Pixel Retro Arcade Mini-Game') {
-    if (this.sprintInProgress) return { status: 'already_running' };
-    this.sprintInProgress = true;
+    const ids = Object.keys(this.state.agents);
+    this.nextResponder = (this.nextResponder ?? -1) + 1;
+    const responder = ids[this.nextResponder % ids.length];
+    const agent = this.state.agents[responder];
 
-    this.state.stats.activeSprint = `Sprint: ${featureName}`;
-    this.state.broadcast(`🚀 Starting Collaborative Sprint: "${featureName}"! All agents report in.`, 'alice');
+    agent.state = 'THINKING';
+    agent.status = `Answering ${msg.sender}...`;
+    this.state.emit('state_change', { type: 'agent_update', data: agent });
 
-    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-    // Phase 1: Alice breaks down the architecture
-    await sleep(2000);
-    this.state.agents.alice.state = 'CODING';
-    this.state.agents.alice.status = `Architecting: ${featureName}`;
-    this.state.assignTask('bob', `Implement rendering for ${featureName}`, 'Canvas sprites & animations', 'Frontend');
-    this.state.assignTask('charlie', `Build backend state & MCP bridge for ${featureName}`, 'JSON-RPC handlers', 'Backend');
-    this.state.assignTask('diana', `Write Vitest unit & E2E suite for ${featureName}`, 'Security & QA', 'QA');
-    this.state.sendMessage('all', `Architecture spec posted to whiteboard. Bob, Charlie, Diana: sprint tasks assigned!`, 'alice');
-
-    // Phase 2: Bob begins frontend coding
-    await sleep(2500);
-    this.state.agents.bob.state = 'CODING';
-    this.state.agents.bob.status = `Coding pixel sprites for ${featureName}`;
-    this.state.updateAgentScreen('bob', {
-      lines: [
-        `// Sprint Feature: ${featureName}`,
-        `export class PixelGameEngine {`,
-        `  constructor(public canvas: HTMLCanvasElement) {`,
-        `    this.ctx = canvas.getContext('2d')!;`,
-        `    this.sprites = new Map();`,
-        `    console.log('[Sprint] Initialized 60 FPS rendering pipeline');`,
-        `  }`,
-        `  renderFrame(state: GameState) {`,
-        `    this.ctx.imageSmoothingEnabled = false;`,
-        `    this.renderEntities(state.entities);`,
-        `  }`,
-        `}`
-      ],
-      logs: [`[Bob] Wrote core game engine loop for ${featureName}`]
-    });
-    this.state.sendMessage('alice', `Frontend engine skeleton compiled and rendering at 60 FPS!`, 'bob');
-
-    // Phase 3: Charlie writes backend
-    await sleep(2500);
-    this.state.agents.charlie.state = 'CODING';
-    this.state.agents.charlie.status = `Writing MCP tools for ${featureName}`;
-    this.state.updateAgentScreen('charlie', {
-      lines: [
-        `// Backend MCP Dispatcher for ${featureName}`,
-        `export function registerSprintTools(server: McpServer) {`,
-        `  server.tool('game_action', { action: z.string() }, async ({ action }) => {`,
-        `    return { content: [{ type: 'text', text: \`Action '\${action}' executed\` }] };`,
-        `  });`,
-        `  console.log('[MCP] Registered sprint tools successfully');`,
-        `}`
-      ],
-      logs: [`[Charlie] Integrated sprint tool calls with WebSocket broadcast`]
-    });
-    this.state.sendMessage('bob', `Backend state synchronization protocol is ready on the local WebSocket bus.`, 'charlie');
-
-    // Phase 4: Diana tests and finds a lint / boundary warning
-    await sleep(2500);
-    this.state.agents.diana.state = 'TESTING';
-    this.state.agents.diana.status = `Running automated test suite`;
-    this.state.updateAgentScreen('diana', {
-      lines: [
-        `RUNNING test/sprint/${featureName.toLowerCase().replace(/\\s+/g, '-')}.test.ts`,
-        `✓ should mount game engine canvas (4ms)`,
-        `✓ should connect to MCP state stream (6ms)`,
-        `⚠ edge-case: boundary collision at x=0 causes subpixel clipping`,
-        `PASS: 19 | FAIL: 0 | WARN: 1`
-      ],
-      logs: [`[Diana] Flagged minor subpixel clipping at boundary for Bob`]
-    });
-    this.state.sendMessage('bob', `Bob, check boundary clipping when x <= 0 in renderEntities.`, 'diana');
-
-    // Phase 5: Bob patches the issue
-    await sleep(2000);
-    this.state.agents.bob.screen.lines[9] = `    this.renderEntities(state.entities.map(e => ({ ...e, x: Math.max(0, e.x) }))); // Patched!`;
-    this.state.updateAgentScreen('bob', { logs: [`[Bob] Fixed boundary clipping, pushed patch!`] });
-    this.state.sendMessage('diana', `Patched! Re-run the assertion suite.`, 'bob');
-
-    // Phase 6: Diana verifies 100% green
-    await sleep(1800);
-    this.state.agents.diana.screen.lines[3] = `✓ boundary collision clipping resolved (2ms)`;
-    this.state.agents.diana.screen.lines[4] = `PASS: 20 | FAIL: 0 | 100% GREEN`;
-    this.state.updateAgentScreen('diana', { logs: [`[Diana] All 20 tests verified green!`] });
-    this.state.sendMessage('alice', `QA verification complete. Zero defects found. Ready for deployment!`, 'diana');
-
-    // Phase 7: Echo writes release notes
-    await sleep(2000);
-    this.state.agents.echo.state = 'RESEARCHING';
-    this.state.agents.echo.status = `Synthesizing sprint documentation`;
-    this.state.updateAgentScreen('echo', {
-      lines: [
-        `# Release Notes: ${featureName}`,
-        `- Engine: 60 FPS pixel rendering with zero subpixel artifacting`,
-        `- Protocol: MCP JSON-RPC 2.0 tool endpoints active`,
-        `- Quality: 20/20 Vitest assertions passed`,
-        `- Ready for Antigravity live orchestration`
-      ],
-      logs: [`[Echo] Generated release notes and indexed into agent memory`]
-    });
-    this.state.broadcast(`🎉 SPRINT COMPLETE! "${featureName}" successfully built, tested, and shipped by Alice, Bob, Charlie, Diana & Echo!`, 'alice');
-
-    // Update whiteboard tasks to DONE
-    this.state.whiteboard.forEach((task) => {
-      if (task.status === 'IN_PROGRESS') {
-        task.status = 'DONE';
-        task.progress = 100;
+    setTimeout(async () => {
+      let text;
+      try {
+        const turn = await llmProvider.generateAgentTurn(responder, msg.text, this.state.intercomMessages);
+        this.syncBudget(agent);
+        agent.screen.thoughts = turn.thoughts;
+        text = turn.text;
+      } catch {
+        text = `${agent.name} here: I heard you.`;
       }
-    });
-    this.state.saveStateToFile();
-    this.sprintInProgress = false;
-
-    return { status: 'sprint_completed', feature: featureName };
+      const hasJob = !/^Idle/.test(agent.currentTask || '');
+      agent.state = hasJob ? 'CODING' : 'IDLE';
+      agent.status = hasJob ? `Active on ${agent.currentTask}` : 'Idle — Ready for task assignment';
+      this.state.broadcast(text, responder);   // the answer goes to the public channel
+      this.state.emit('state_change', { type: 'agent_update', data: agent });
+    }, 1000);
   }
+
 }
 
 export const agentCoordinator = new AgentCoordinator();

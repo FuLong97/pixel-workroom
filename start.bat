@@ -2,6 +2,7 @@
 setlocal
 cd /d "%~dp0"
 title Pixel Workroom
+if "%PORT%"=="" set PORT=3333
 
 where node >nul 2>nul
 if errorlevel 1 (
@@ -19,14 +20,19 @@ if not exist node_modules (
 where claude >nul 2>nul
 if errorlevel 1 echo Hinweis: "claude" CLI nicht gefunden. Der Build-Knopf braucht Claude Code ^(npm i -g @anthropic-ai/claude-code^).
 
-rem Alten Server auf Port 3333 beenden
-for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3333 " ^| findstr LISTENING') do taskkill /PID %%p /F >nul 2>nul
+rem Einen aelteren Workroom auf diesem Port beenden, damit wirklich der NEUE Code laeuft.
+rem PowerShell statt netstat: netstat schreibt auf englischem Windows "LISTENING" und auf deutschem
+rem "ABHOEREN" - mit einer Textsuche wurde der alte Server auf deutschem Windows nie gefunden.
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }" >nul 2>nul
+timeout /t 1 /nobreak >nul
 
 rem Browser oeffnen, sobald der Server oben ist
-start "" /b cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:3333"
+start "" /b cmd /c "timeout /t 3 /nobreak >nul & start http://localhost:%PORT%"
 
 echo.
-echo Pixel Workroom laeuft auf http://localhost:3333  (Fenster schliessen = beenden)
+echo Pixel Workroom laeuft auf http://localhost:%PORT%  (Fenster schliessen = beenden)
 echo.
 node src\server.mjs
+echo.
+echo Der Server wurde beendet. Scrolle nach oben, falls dort eine Fehlermeldung steht.
 pause

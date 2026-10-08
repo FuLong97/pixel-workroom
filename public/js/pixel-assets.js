@@ -1,4 +1,6 @@
 // public/js/pixel-assets.js - High-Definition 16-Bit Procedural Pixel Art Asset Generator
+import { addExtraProps } from './props-extra.js';
+
 export class PixelAssetManager {
   constructor() {
     this.textures = {};
@@ -21,6 +23,7 @@ export class PixelAssetManager {
     this.generateFloorCeilingTextures();
     this.generateAgentSprites();
     this.generateOfficeProps();
+    addExtraProps(this);   // tables, chairs, shelves, lamps, server racks, ...
   }
 
   generateWallTextures() {

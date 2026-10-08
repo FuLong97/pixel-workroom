@@ -18,10 +18,14 @@ export function nearestLamp(x, y) {
   return { lx, ly, d2 };
 }
 
+// The floor lamps switch the room lights: 1 = on, lower = dim
+let lightLevel = 1;
+export const setLightLevel = (v) => { lightLevel = v; };
+
 // 0..~1.3 light level at a world position (soft pool under each lamp + dim ambient)
 export function lightAt(x, y) {
   const { d2 } = nearestLamp(x, y);
-  return 0.62 + 1.1 / (1 + d2 * 0.1);
+  return (0.62 + 1.1 / (1 + d2 * 0.1)) * lightLevel;
 }
 
 const pack = (r, g, b) => (255 << 24) | (Math.min(255, b) << 16) | (Math.min(255, g) << 8) | Math.min(255, r);
@@ -104,18 +108,21 @@ export class FloorCeilingRenderer {
       if (s.type !== 'agent') continue;
       const c = hexToRgb(this.engine.state.agents?.[s.agentId]?.color || '#64748b');
       this.rugs.push({
-        x: s.x, y: s.y,
+        x: s.x, y: s.y, hw: 2.1, hh: 1.5,
         edge: [c[0] * 0.55, c[1] * 0.55, c[2] * 0.55],
         fill: [c[0] * 0.28 + 14, c[1] * 0.28 + 14, c[2] * 0.28 + 16]
       });
     }
+    // rugs of the room itself (meeting corner, lounge, entrance, reading spot)
+    for (const r of this.engine.decorRugs || []) this.rugs.push(r);
   }
 
   rugAt(fx, fy) {
     for (const r of this.rugs) {
       const dx = fx - r.x, dy = fy - r.y;
-      if (dx > -2.1 && dx < 2.1 && dy > -1.5 && dy < 1.5) {
-        return Math.abs(dx) > 1.85 || Math.abs(dy) > 1.25 ? r.edge : r.fill;
+      if (dx > -r.hw && dx < r.hw && dy > -r.hh && dy < r.hh) {
+        // a darker, brighter band around the edge makes it look like a real rug
+        return Math.abs(dx) > r.hw - 0.25 || Math.abs(dy) > r.hh - 0.25 ? r.edge : r.fill;
       }
     }
     return null;
@@ -158,7 +165,7 @@ export class FloorCeilingRenderer {
           const tex = breakroom ? this.woodTex : this.floorTex;
           const c = tex[v * size + u];
           let r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
-          const rug = breakroom ? null : this.rugAt(fx, fy);
+          const rug = this.rugAt(fx, fy);
           if (rug) { r = rug[0] + (r - 30) * 0.2; g = rug[1] + (g - 37) * 0.2; b = rug[2] + (b - 54) * 0.2; }
           // warm lamp light on top of cool ambient, fogged into the dark
           const k = light * fog;
@@ -175,7 +182,7 @@ export class FloorCeilingRenderer {
           if (d2 < 0.75) {
             // soft-edged glowing lamp panel with a thin frame
             const a = Math.min(1, (0.75 - d2) / 0.25);
-            const glow = 255 * flicker;
+            const glow = 255 * flicker * Math.max(0.12, lightLevel);   // lamp panels go dark with the lights
             r += (glow - r) * a; g += (glow * 0.95 - g) * a; b += (glow * 0.82 - b) * a;
           } else if (d2 < 0.95) {
             r *= 0.45; g *= 0.45; b *= 0.5;

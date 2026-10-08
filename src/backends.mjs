@@ -56,7 +56,7 @@ export function buildArgs(kind, prompt, cwd, opts = {}) {
   if (kind === 'claude') {
     return [
       '-p', prompt,
-      '--model', process.env.CLAUDE_RUN_MODEL || 'sonnet',
+      '--model', opts.model || process.env.CLAUDE_RUN_MODEL || 'sonnet',
       '--permission-mode', 'acceptEdits',
       '--allowedTools', 'Read,Write,Edit,Glob,Grep',
       '--output-format', 'stream-json',

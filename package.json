@@ -8,7 +8,7 @@
     "start": "node src/server.mjs",
     "mcp": "node src/mcp-server.mjs",
     "cli": "node src/cli.mjs",
-    "test": "node test/workroom.test.mjs && node test/runner.test.mjs && node test/telegram.test.mjs && node test/setup-telegram.test.mjs && node test/fallback.test.mjs && node test/provider-fallback.test.mjs && node test/local.test.mjs",
+    "test": "node test/workroom.test.mjs && node test/runner.test.mjs && node test/telegram.test.mjs && node test/setup-telegram.test.mjs && node test/fallback.test.mjs && node test/provider-fallback.test.mjs && node test/local.test.mjs && node test/chatter.test.mjs && node test/heal.test.mjs && node test/version.test.mjs && node test/models.test.mjs",
     "test:e2e": "node test/e2e-telegram.mjs",
     "telegram:setup": "node scripts/telegram-setup.mjs",
     "screenshots": "node scripts/make-screenshots.mjs"

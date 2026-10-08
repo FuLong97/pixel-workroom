@@ -6,7 +6,7 @@ A pixel-art 3D office where AI agents work for you. Walk around in first person 
 - **Goal runner**: type an idea, press **Build**, get working files and an **Open result** button
 - **Live agent monitors**: see each agent's editor, thoughts and terminal
 - **Health bar = token budget** per agent, plus a team total in the header
-- **MCP server** with 9 tools for Claude Code, Codex, Gemini CLI, Cursor, ...
+- **MCP server** with 8 tools for Claude Code, Codex, Gemini CLI, Cursor, ...
 - **Token Saver** on by default (local replies, cheap models, response cache, hard budgets)
 
 <p align="center">
@@ -116,7 +116,22 @@ Then ask your tool, for example: *"Use pixel-workroom to split 'build a snake ga
 | `workroom_get_screen` / `workroom_update_agent_screen` | Read or write an agent's monitor |
 | `workroom_broadcast` / `workroom_send_agent_message` | Talk to everyone / one agent |
 | `workroom_intercom_history` | Read recent chat |
-| `workroom_trigger_sprint` | Scripted demo sprint (not a real build) |
+
+## Orchestrated team: a strong model leads cheaper ones
+
+**Team** mode does not use one big model for everything. Alice, the lead, runs on the strongest model and writes a short `PLAN.md` with a shared spec and one section per worker (`## Bob`, `## Charlie`, `## Diana`, `## Echo`). Each worker then does **only its own section** on a cheaper model:
+
+| Step | Role | Default model |
+|---|---|---|
+| Alice | plans and splits the work | `opus` (`CLAUDE_PLAN_MODEL`) |
+| Bob | builds the app | `sonnet` (`CLAUDE_RUN_MODEL`) |
+| Charlie, Diana, Echo | logic, bug fixes, docs | `haiku` (`CLAUDE_CHECK_MODEL`) |
+
+The expensive model only writes a few lines, the cheap ones do the bulk, and each worker gets a small, clear job instead of the whole problem, which keeps quality up while tokens go down. `ORCHESTRATE=0` switches back to one model for every step. **Solo** is a single builder and never uses the planner. Hover a step in the goal bar to see its model.
+
+## Live progress and what the agents run
+
+Progress is pushed to the browser the moment it changes: the goal bar steps, the job cards on the whiteboard, the health bars and the monitors all move without polling. The terminal in an agent's monitor shows every tool call, and **shell commands appear in full** (amber). In Claude runs only file tools are allowed, so a shell attempt is shown in red as blocked; Codex runs commands inside its `workspace-write` sandbox and they are listed as it prints them.
 
 ## Health bar and tokens
 
@@ -149,6 +164,36 @@ ollama pull qwen3:8b      # small and fast, supports tools
 
 Settings (all optional): `LOCAL_LLM_URL` (another server, OpenAI-compatible, e.g. `http://localhost:1234/v1`), `LOCAL_LLM_MODEL` (chat), `LOCAL_RUN_MODEL` (builds), `LOCAL_LLM_KIND=ollama|lmstudio` (when a server runs on a custom port), `LOCAL_LLM_TIMEOUT_S`, `LOCAL_LLM=0` (turn local models off).
 
+## Switch and download local models (🧠 Models tab)
+
+Open the **🧠 Models** tab (or walk to a **server rack** and press `E`):
+
+- **Installed models:** pick which one answers **Chat** and which one is used for **Build** (when a build falls back to a local model), or press **Try** to hear a quick hello and see how long it takes. Your choice is saved in `workroom-settings.json`. Models marked **no tools** are fine for chat but usually write no files in a build.
+- **Download:** families with a ladder of sizes (Qwen 3, Qwen 2.5 Coder, Gemma 3, Llama 3.2, DeepSeek R1, Phi 4), one button per size, a live progress bar and a **Cancel** button. You can also type any other Ollama model name. Names are checked before anything starts; only one download runs at a time. Downloads need Ollama and an internet connection.
+- **Uncensored ("abliterated") models:** community versions with the built-in refusals removed (Qwen 3, Phi 4 and Gemma 3 variants). They answer what normal models decline and can be a little weaker than the original. What you ask and do with them is your responsibility.
+- **Video memory (VRAM):** every size shows roughly how much graphics-card memory it needs, compared with your card (NVIDIA cards are detected through `nvidia-smi`; for other cards set `GPU_VRAM_GB=12` in `.env`). Green fits, amber is tight, red is too big: it then runs partly on the CPU and gets much slower. Ollama also tells us what is loaded right now and how much video memory it really uses. The numbers are estimates for short chats; a long context needs more.
+
+## Things in the room you can use
+
+Press `E` next to a piece of furniture (or click it in the top view). A box at the bottom tells you what it does.
+
+| Furniture | What it does |
+|---|---|
+| 📋 Planning board | Opens the jobs and their live progress |
+| 🗣 Meeting table | Opens the team chat |
+| 🗄 Filing cabinet | Opens the form to file a new job |
+| 📚 Bookshelf | **Library**: every project the team built, with an Open button |
+| 🖥 Server rack | The local model manager (🧠 Models) |
+| 🖨 Printer | Saves a Markdown report of the jobs, the team and the latest chat |
+| 💡 Floor lamp | Switches the room lights on and off |
+| 🪴 Ficus | Waters the plant, which fills every agent's token bar again |
+| 🛋 Sofa | API keys and settings |
+| 💧 Water cooler | Phone link and Telegram status |
+| 🗑 Recycling bin | Empties the chat and the jobs (asks first) |
+| ☕ Coffee bar, 👾 Arcade, 🥤 Vending machine | A little message to the team |
+
+Desks, tables, shelves and machines are solid: you walk around them.
+
 ## Configuration
 
 Copy [`.env.example`](.env.example) to `.env`. Everything is optional. Without API keys the in-room agents reply with free local heuristics. Key settings: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `CLAUDE_RUN_MODEL`, `AGENT_TOKEN_BUDGET`, `PORT`, `WORKROOM_DEMO=1` (fake jobs and chatter for demos).
@@ -159,7 +204,6 @@ Copy [`.env.example`](.env.example) to `.env`. Everything is optional. Without A
 node src/cli.mjs list
 node src/cli.mjs task bob "Add lights" "Radial falloff for ceiling lamps"
 node src/cli.mjs broadcast "Stand-up in five"
-node src/cli.mjs sprint "Mini game"     # scripted demo
 ```
 
 ## Security notes

@@ -381,8 +381,27 @@ export class LLMProviderManager {
   }
 
   // --- Local Fallback Simulation (Zero tokens spent) ---
-  generateLocalSimulation(agentId, persona, prompt) {
+  generateLocalSimulation(agentId, persona, rawPrompt) {
+    // Quote only a short topic, never the whole message: when two agents answer each other the full
+    // text would be quoted inside the next reply again and again and grow without limit.
+    const prompt = String(rawPrompt).replace(/\s+/g, ' ').replace(/"/g, "'").trim().slice(0, 60);
     const q = prompt.toLowerCase();
+
+    // Small talk and questions get an honest, friendly answer instead of a made-up status report
+    const name = agentId.charAt(0).toUpperCase() + agentId.slice(1);
+    const greeting = /^(hi|hello|hey|hallo|moin|servus|yo)\b|\b(folks|anyone|everybody|everyone)\b/.test(q);
+    if (greeting || prompt.endsWith('?')) {
+      return {
+        text: greeting
+          ? `Hi! ${name} here (${persona}). Tell the team what to build in the 🎯 goal bar and we will get to work.`
+          : `${name}: good question. Without a connected model I can only give short built-in replies. Add an API key or install Ollama for real answers, or use the 🎯 goal bar to get something built.`,
+        thoughts: 'Built-in reply (no model connected). 0 external API tokens consumed.',
+        tokens: 0,
+        cached: true,
+        provider: 'local-simulation'
+      };
+    }
+
     let text = `Task received by ${persona}: "${prompt}". Processing pipeline updated.`;
     let thoughts = `Autonomous rule evaluation. 0 external API tokens consumed.`;
 

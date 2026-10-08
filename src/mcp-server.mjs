@@ -175,7 +175,7 @@ server.tool(
 // Tool 7: View the whiteboard
 server.tool(
   'workroom_get_whiteboard',
-  'View the central office whiteboard showing all sprint tasks and completion status',
+  'View the central office whiteboard showing all tasks and their progress',
   {},
   async () => {
     const wb = stateManager.whiteboard;
@@ -187,27 +187,6 @@ server.tool(
         {
           type: 'text',
           text: `=== CENTRAL WORKROOM WHITEBOARD ===\n${cards.join('\n')}`
-        }
-      ]
-    };
-  }
-);
-
-// Tool 8: Trigger a collaborative sprint
-server.tool(
-  'workroom_trigger_sprint',
-  'Trigger an autonomous multi-agent sprint where all agents coordinate over MCP to plan, build, test, and document a feature',
-  {
-    feature_name: z.string().describe('Name of the feature or project sprint to execute')
-  },
-  async ({ feature_name }) => {
-    // Start sprint in background
-    agentCoordinator.triggerSprint(feature_name);
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `🚀 Multi-agent collaborative sprint triggered for "${feature_name}"!\nAlice (Architect), Bob (Frontend), Charlie (Backend MCP), Diana (QA), and Echo (Researcher) are coordinating live on the MCP intercom bus and updating their first-person screens.`
         }
       ]
     };

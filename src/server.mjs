@@ -11,6 +11,8 @@ import { runner, WORKSPACE } from './runner.mjs';
 import { startTelegramFromEnv } from './telegram.mjs';
 import { phoneBase, isLoopback } from './network.mjs';
 import { detectLocal, pickChatModel, pickToolModel } from './local.mjs';
+import * as localModels from './local-models.mjs';
+import { versionInfo } from './version.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -154,6 +156,36 @@ function parseJsonBody(req) {
 
 async function handleApiRequest(req, res, pathname, url) {
   try {
+    // Library: every project folder the team has built, newest first
+    if (pathname === '/api/projects' && req.method === 'GET') {
+      const projects = [];
+      try {
+        for (const d of fs.readdirSync(WORKSPACE, { withFileTypes: true })) {
+          if (!d.isDirectory()) continue;
+          const dir = path.join(WORKSPACE, d.name);
+          const files = fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((f) => f.isFile()).slice(0, 300);
+          const index = path.join(dir, 'index.html');
+          let title = '';
+          if (fs.existsSync(index)) {
+            const m = fs.readFileSync(index, 'utf8').slice(0, 4000).match(/<title>([^<]*)/i);
+            title = m ? m[1].trim() : '';
+          }
+          // "last changed" = the newest file (a folder's own time only moves when files are added or removed)
+          const newestFile = files.reduce((t, f) => Math.max(t, fs.statSync(path.join(f.parentPath || f.path, f.name)).mtimeMs), 0);
+          const updated = newestFile || fs.statSync(dir).mtimeMs;
+          projects.push({ name: d.name, title, files: files.length, hasIndex: fs.existsSync(index), updated });
+        }
+      } catch { /* no workspace yet: an empty library */ }
+      projects.sort((a, b) => b.updated - a.updated);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ projects: projects.slice(0, 100) }));
+      return;
+    }
+    if (pathname === '/api/version' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(versionInfo()));
+      return;
+    }
     if (pathname === '/api/local' && req.method === 'GET') {
       const info = await detectLocal({ force: true });
       const out = info.available
@@ -163,9 +195,72 @@ async function handleApiRequest(req, res, pathname, url) {
       res.end(JSON.stringify(out));
       return;
     }
+
+    // ---- local models: list, choose, try, download (Models tab)
+    if (pathname === '/api/local/models' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(await localModels.overview()));
+      return;
+    }
+    if (pathname === '/api/local/select' && req.method === 'POST') {
+      const body = await parseJsonBody(req);
+      try {
+        const out = await localModels.select(body.role, body.model);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+    if (pathname === '/api/local/try' && req.method === 'POST') {
+      const body = await parseJsonBody(req);
+      try {
+        const out = await localModels.tryModel(body.model);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+    if (pathname === '/api/local/pull' && req.method === 'POST') {
+      const body = await parseJsonBody(req);
+      if (!localModels.isValidModelName(body.model)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'That is not a valid model name (example: qwen3:8b).' }));
+        return;
+      }
+      // the download runs in the background; progress reaches every open page over the WebSocket
+      let lastSent = 0;
+      const progress = (snap) => {
+        const now = Date.now();
+        if (snap && !snap.done && now - lastSent < 250) return;
+        lastSent = now;
+        stateManager.emit('state_change', { type: 'local_pull', data: snap });
+      };
+      const started = localModels.startPull(body.model, progress).catch((e) => ({ error: e.message }));
+      // answer right away if it could not start (busy, no Ollama), otherwise confirm the start
+      const early = await Promise.race([started, new Promise((r) => setTimeout(() => r(null), 150))]);
+      if (early?.error) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: early.error }));
+      } else {
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ started: true, pull: localModels.currentPull() }));
+      }
+      return;
+    }
+    if (pathname === '/api/local/pull/cancel' && req.method === 'POST') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ cancelled: localModels.cancelPull() }));
+      return;
+    }
     if (pathname === '/api/share' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ base: phoneBase(PORT) }));
+      res.end(JSON.stringify({ base: phoneBase(PORT), telegram: { running: !!telegramBot, allowed: telegramBot ? telegramBot.allowed.size : 0 } }));
       return;
     }
     if (pathname === '/api/run' && req.method === 'GET') {
@@ -251,14 +346,6 @@ async function handleApiRequest(req, res, pathname, url) {
       return;
     }
 
-    if (pathname === '/api/sprint' && req.method === 'POST') {
-      const body = await parseJsonBody(req);
-      agentCoordinator.triggerSprint(body.feature || 'Pixel Workroom Feature');
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, status: 'sprint_started' }));
-      return;
-    }
-
     if (pathname === '/api/clear-jobs' && req.method === 'POST') {
       const newState = stateManager.clearAllJobs();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -306,6 +393,8 @@ async function handleApiRequest(req, res, pathname, url) {
 
 // Attach WebSocket Server
 const wss = new WebSocketServer({ server });
+// the WebSocket server repeats the HTTP server's errors; the HTTP server's own handler (below) reports them
+wss.on('error', () => {});
 
 wss.on('connection', (ws, req) => {
   if (!isLoopback(req.socket.remoteAddress)) { ws.close(); return; }
@@ -323,8 +412,6 @@ wss.on('connection', (ws, req) => {
         stateManager.sendMessage(action.recipient, action.text, action.sender || 'player');
       } else if (action.type === 'assign_task') {
         stateManager.assignTask(action.agentId, action.title, action.description, action.category);
-      } else if (action.type === 'trigger_sprint') {
-        agentCoordinator.triggerSprint(action.feature || 'Pixel Quest Arcade Game');
       } else if (action.type === 'update_screen') {
         stateManager.updateAgentScreen(action.agentId, action.data);
       } else if (action.type === 'player_move') {
@@ -355,6 +442,7 @@ let lastMtime = 0;
 fs.watchFile(STATE_PATH, { interval: 500 }, (cur) => {
   if (cur.mtimeMs === lastMtime) return;
   lastMtime = cur.mtimeMs;
+  if (cur.mtimeMs === stateManager.lastWrittenMtime) return;   // our own save, nothing new to load
   stateManager.reloadFromFile();
   const msg = JSON.stringify({ type: 'init', state: stateManager.getFullState() });
   for (const c of wss.clients) if (c.readyState === 1) c.send(msg);
@@ -375,9 +463,20 @@ stateManager.on('state_change', (change) => {
 });
 
 // Start listening
+// A second Workroom on the same port cannot start. Say so clearly: the old one keeps running with its
+// old code, which is easy to miss when the new window just closes.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n❌ Port ${PORT} is already in use. An older Pixel Workroom is probably still running there (it keeps the old code and the old bugs).\n   Close that window, or run start.bat, which stops it first. Then start again.\n`);
+    process.exit(1);
+  }
+  throw err;
+});
+
+let telegramBot = null;   // set once the server is listening (used by the water cooler's status)
 const HOST = process.env.LAN_SHARE === '0' ? '127.0.0.1' : '0.0.0.0';
 server.listen(PORT, HOST, () => {
-  startTelegramFromEnv(PORT);
+  telegramBot = startTelegramFromEnv(PORT);
   console.log(`====================================================`);
   console.log(`🎮 Pixel Workroom 3D Server running at: http://localhost:${PORT}`);
   console.log(`🔌 MCP Stdio Bridge active | WebSockets listening`);

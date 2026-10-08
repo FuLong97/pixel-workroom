@@ -28,6 +28,15 @@ export class GoalPanel {
     return r.json();
   }
 
+  // Live status pushed by the server over the WebSocket
+  applyStatus(update) {
+    const wasRunning = this.status?.running;
+    this.status = { ...(this.status || {}), ...update };
+    this.render();
+    // when a run ends the pushed status carries the files; otherwise fetch them once
+    if (wasRunning && !update.running && !update.files) this.poll();
+  }
+
   async poll() {
     try {
       this.status = await this.api('/api/run');
@@ -36,7 +45,7 @@ export class GoalPanel {
     }
     this.render();
     clearTimeout(this.timer);
-    if (this.status?.running) this.timer = setTimeout(() => this.poll(), 1500);
+    if (this.status?.running) this.timer = setTimeout(() => this.poll(), 5000);
   }
 
   async start() {
@@ -69,7 +78,7 @@ export class GoalPanel {
       const chips = s.steps
         .map((st, i) => {
           const border = i === s.current ? 'border-amber-400 text-amber-200' : 'border-slate-700 text-slate-300';
-          return `<button data-agent="${st.agent}" class="goal-step px-2 py-1 rounded border text-[11px] ${border} bg-slate-900 hover:bg-slate-800" title="Open monitor">${ICON[st.status] || '⚪'} ${this.esc(st.agent)} · ${this.esc(st.label)}</button>`;
+          return `<button data-agent="${st.agent}" class="goal-step px-2 py-1 rounded border text-[11px] ${border} bg-slate-900 hover:bg-slate-800" title="${this.esc(st.agent)} · model: ${this.esc(st.model || 'default')}">${ICON[st.status] || '⚪'} ${this.esc(st.agent)} · ${this.esc(st.label)}</button>`;
         })
         .join('');
       const queueList = s.queue?.length

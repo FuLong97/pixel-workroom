@@ -34,7 +34,7 @@ for (let i = 0; i < 40; i++) {
 }
 
 const shots = [
-  ['first-person.png', `${base}/?shot=fpv&res=hd&x=11&y=2.2&a=1.57&fov=1.05&dock=1`],
+  ['first-person.png', `${base}/?shot=fpv&res=hd&x=11&y=3.3&a=1.57&fov=1.12&dock=1`],
   ['top-view.png', `${base}/?shot=top&res=hd&dock=0`],
   ['monitor.png', `${base}/?shot=monitor&agent=bob&res=hd&dock=0`],
   ['whiteboard.png', `${base}/?shot=intercom&tab=whiteboard&res=hd&dock=0`]

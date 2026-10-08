@@ -104,6 +104,10 @@ try {
     assert.strictEqual(await via(`/workspace/${dir}/index.html`), 200, 'project visible from the network');
     assert.strictEqual(await via('/'), 403, 'control UI hidden from the network');
     assert.strictEqual(await via('/api/state'), 403, 'API hidden from the network');
+    assert.strictEqual(await via('/api/projects'), 403, 'the project list is not shown to the network');
+    assert.strictEqual(await via('/api/local/models'), 403, 'model settings are not shown to the network');
+    assert.strictEqual(await via('/api/local/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"model":"qwen3:8b"}' }), 403, 'nobody on the network can start a download');
+    assert.strictEqual(await via('/api/local/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"role":"chat","model":"x"}' }), 403, 'nor change the models');
     assert.strictEqual(await via('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"goal":"evil"}' }), 403, 'builds cannot be started from the network');
     console.log(`  ✓ via ${lan.ip}: project 200, UI/API/run 403`);
   }

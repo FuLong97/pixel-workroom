@@ -24,6 +24,7 @@ export class PixelWorkroomApp {
     this.setupUIControls();
     this.startLoop();
     this.applyShotMode();
+    this.watchServerVersion();
   }
 
   // Screenshot mode for docs: ?shot=fpv|top|monitor|intercom  (+ x, y, a, res, dock, agent, tab)
@@ -50,6 +51,125 @@ export class PixelWorkroomApp {
     if (shot === 'top') e.setViewMode('top');
     if (shot === 'monitor') setTimeout(() => this.openMonitorCockpit(q.get('agent') || 'bob'), 400);
     if (shot === 'intercom') setTimeout(() => this.intercom.openIntercom(q.get('tab') || 'whiteboard'), 400);
+  }
+
+  // ---------------------------------------------------------------- things you can use in the room
+  toast(message, ms = 2800) {
+    const el = document.getElementById('toast');
+    if (!el) return;
+    el.textContent = message;
+    el.classList.remove('hidden');
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
+  }
+
+  showInfo(title, html) {
+    const modal = document.getElementById('info-modal');
+    if (!modal) return;
+    document.getElementById('info-title').textContent = title;
+    document.getElementById('info-body').innerHTML = html;
+    modal.classList.remove('hidden');
+    if (!this.infoBound) {
+      this.infoBound = true;
+      document.getElementById('info-close').addEventListener('click', () => modal.classList.add('hidden'));
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+    }
+  }
+
+  // Pressing E at a piece of furniture (or clicking it in the top view) ends up here
+  runAction(act) {
+    const ic = this.intercom;
+    switch (act) {
+      case 'jobs': return ic.openIntercom('whiteboard');
+      case 'chat': return ic.openIntercom('chat');
+      case 'assign': return ic.openIntercom('jobs');
+      case 'library': return ic.openIntercom('library');
+      case 'models': return ic.openIntercom('models');
+      case 'settings': return ic.openIntercom('apikeys');
+      case 'lights': {
+        const on = this.engine.toggleLights();
+        return this.toast(on ? '💡 Lights on' : '🌙 Lights off');
+      }
+      case 'print': return this.printReport();
+      case 'water': return this.waterPlants();
+      case 'share': return this.showShare();
+      case 'bin':
+        if (confirm('Empty the bin?\n\nThis clears the chat and all jobs on the whiteboard.')) {
+          this.sendWebSocketAction({ type: 'clear_jobs' });
+          this.toast('🗑 Chat and jobs cleared');
+        }
+        return;
+      default:
+        return this.toast('Nothing to do here yet');
+    }
+  }
+
+  // Printer: save a Markdown report of the jobs, the team and the latest chat
+  printReport() {
+    const s = this.state;
+    const lines = [`# Pixel Workroom report`, `_${new Date().toLocaleString()}_`, '', '## Jobs'];
+    for (const t of s.whiteboard || []) lines.push(`- ${t.status === 'DONE' ? '[x]' : '[ ]'} ${t.title} (@${t.assignee}, ${t.progress}%)`);
+    if (!(s.whiteboard || []).length) lines.push('- none');
+    lines.push('', '## Team');
+    for (const a of Object.values(s.agents || {})) lines.push(`- ${a.name} (${a.role}): ${a.state}, ${a.energy}% tokens left. ${a.currentTask}`);
+    lines.push('', '## Latest chat');
+    for (const m of (s.intercomMessages || []).slice(-30)) lines.push(`- [${m.timestamp}] ${m.sender} -> ${m.recipient}: ${String(m.text).slice(0, 300)}`);
+    const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/markdown' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `workroom-report-${new Date().toISOString().slice(0, 10)}.md`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+    this.toast('🖨 Report saved to your downloads');
+  }
+
+  // Watering the ficus refills every agent's token bar (the health bar)
+  async waterPlants() {
+    try {
+      const st = await (await fetch('/api/tokens/refill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+      if (st.agents) {
+        this.state.agents = st.agents;
+        this.engine.state = this.state;
+        this.updateTokenHud();
+      }
+      this.toast('🪴 Watered! All token bars are full again');
+    } catch {
+      this.toast('The plant could not be watered (server offline)');
+    }
+  }
+
+  // Water cooler: where to reach the room from a phone or Telegram
+  async showShare() {
+    let share = {};
+    let run = {};
+    try { share = await (await fetch('/api/share')).json(); } catch { /* offline */ }
+    try { run = await (await fetch('/api/run')).json(); } catch { /* offline */ }
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const link = share.base && run.dir ? `${share.base}/workspace/${encodeURIComponent(run.dir)}/` : null;
+    const tg = share.telegram || {};
+    this.showInfo('💧 Water cooler: phone and Telegram', `
+      <div><strong>📱 Open the latest result on your iPhone</strong> (same Wi-Fi)</div>
+      ${link ? `<div class="p-2 rounded bg-slate-950 border border-slate-700 break-all select-text"><code>${esc(link)}</code></div>
+                <button id="copy-link" class="px-2 py-1 rounded bg-cyan-700 hover:bg-cyan-600 text-white">Copy link</button>`
+             : '<div class="text-slate-400">Nothing built yet, or sharing is off (LAN_SHARE=0). Build something first.</div>'}
+      <div class="pt-2"><strong>✈️ Telegram</strong></div>
+      <div>${tg.running ? `🟢 Your bot is running, ${tg.allowed} chat(s) may give orders.` : '⚪ Not set up. Run <code>npm run telegram:setup</code> after putting a bot token in <code>.env</code>.'}</div>
+    `);
+    document.getElementById('copy-link')?.addEventListener('click', async (e) => {
+      try { await navigator.clipboard.writeText(link); e.target.textContent = 'Copied ✓'; } catch { e.target.textContent = 'Select and copy it by hand'; }
+    });
+  }
+
+  // Warn when the code on disk is newer than the server that is running (an old server keeps old bugs alive)
+  watchServerVersion() {
+    const check = async () => {
+      try {
+        const v = await (await fetch('/api/version')).json();
+        document.getElementById('stale-banner')?.classList.toggle('hidden', !v.stale);
+      } catch { /* offline or standalone: nothing to compare */ }
+    };
+    check();
+    setInterval(check, 20000);
   }
 
   getInitialFallbackState() {
@@ -241,8 +361,31 @@ export class PixelWorkroomApp {
         audioSynth.playBleep();
       } else if (type === 'agent_update') {
         this.state.agents[payload.id] = payload;
+        this.updateTokenHud();
+        if (this.intercom.activeTab === 'agents') this.intercom.renderAgentsGrid();
         if (this.intercom.currentMonitorAgentId === payload.id) {
           this.intercom.updateMonitorContent(payload.id);
+        }
+      } else if (type === 'local_pull') {
+        this.intercom.onPull(payload);
+      } else if (type === 'jobs_cleared') {
+        // the bin: chat and jobs were emptied on the server
+        this.state.agents = payload.agents;
+        this.state.whiteboard = payload.whiteboard || [];
+        this.state.intercomMessages = payload.intercomMessages || [];
+        this.engine.state = this.state;
+        this.intercom.renderChatFeed();
+        this.intercom.renderWhiteboard();
+        this.updateTokenHud();
+      } else if (type === 'run_update') {
+        // progress arrives the moment it happens instead of waiting for the next poll
+        this.goalPanel.applyStatus(payload);
+      } else if (type === 'task_update') {
+        const card = (this.state.whiteboard || []).find((t) => t.id === payload.id);
+        if (card) {
+          card.progress = payload.progress;
+          card.status = payload.status;
+          this.intercom.updateWhiteboardCard(card);
         }
       } else if (type === 'task_assigned') {
         this.state.whiteboard.unshift(payload.task);
