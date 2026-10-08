@@ -23,7 +23,7 @@
     "gemini",
     "ai-agents"
   ],
-  "author": "Pixel Workroom contributors",
+  "author": "FuLong97",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
@@ -43,5 +43,13 @@
     "README.md",
     "LICENSE",
     "scripts"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FuLong97/pixel-workroom.git"
+  },
+  "homepage": "https://github.com/FuLong97/pixel-workroom#readme",
+  "bugs": {
+    "url": "https://github.com/FuLong97/pixel-workroom/issues"
+  }
 }

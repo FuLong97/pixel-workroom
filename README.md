@@ -14,7 +14,8 @@ A pixel-art 3D office where AI agents work for you. Walk around in first person 
 Requirements: Node.js 20.12 or newer. For the Build button, the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI installed and signed in (run `claude` once).
 
 ```bash
-git clone <this repo> && cd pixel-workroom-mcp
+git clone https://github.com/FuLong97/pixel-workroom.git
+cd pixel-workroom
 npm install
 npm start          # http://localhost:3333
 ```
@@ -80,9 +81,9 @@ The server prints your Wi-Fi address on start (`📱 Phone (same Wi-Fi) opens fi
 Start the web UI (`npm start`), then register the stdio server once per tool. Use the absolute path to `src/mcp-server.mjs`.
 
 ```bash
-claude mcp add pixel-workroom -- node /ABSOLUTE/PATH/pixel-workroom-mcp/src/mcp-server.mjs
-codex  mcp add pixel-workroom -- node /ABSOLUTE/PATH/pixel-workroom-mcp/src/mcp-server.mjs
-gemini mcp add pixel-workroom node /ABSOLUTE/PATH/pixel-workroom-mcp/src/mcp-server.mjs
+claude mcp add pixel-workroom -- node /ABSOLUTE/PATH/pixel-workroom/src/mcp-server.mjs
+codex  mcp add pixel-workroom -- node /ABSOLUTE/PATH/pixel-workroom/src/mcp-server.mjs
+gemini mcp add pixel-workroom node /ABSOLUTE/PATH/pixel-workroom/src/mcp-server.mjs
 ```
 
 Other clients (Claude Desktop, Cursor, Antigravity): copy [`mcp_config.example.json`](mcp_config.example.json) into their MCP config and fix the path. Gemini CLI asks you to trust the folder the first time.
