@@ -1,6 +1,7 @@
 // src/runner.mjs - Runs a team goal through the local Claude Code CLI inside ./workspace
 // Each agent gets a role-specific prompt; output streams to their in-world monitor.
 import { spawn } from 'child_process';
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -19,10 +20,17 @@ const ROLES = {
   echo: { label: 'Docs', category: 'Research', prompt: (g) => `You are Echo, documentation specialist. Goal: "${g}". Write a concise README.md (what it is, how to open it, controls). Do not change code.` }
 };
 
+export const MAX_QUEUE = 5;        // goals waiting in total
+export const MAX_PER_OWNER = 2;    // goals one person may have waiting
+
 const MODE_STEPS = { solo: ['bob'], team: ['alice', 'bob', 'charlie', 'diana', 'echo'] };
 
-class Runner {
+class Runner extends EventEmitter {
   constructor() {
+    super();
+    this.queue = [];
+    this.job = null;
+    this.seq = 0;
     this.reset();
     this.dir = this.newestProject();
   }
@@ -58,6 +66,8 @@ class Runner {
       goal: this.goal,
       mode: this.mode,
       dir: this.dir,
+      owner: this.job?.owner ?? null,
+      queue: this.queue.map((j) => ({ id: j.id, goal: j.goal, mode: j.mode, owner: j.owner })),
       steps: this.steps,
       current: this.current,
       error: this.error,
@@ -86,15 +96,51 @@ class Runner {
     if (agent.screen.logs.length > 25) agent.screen.logs.shift();
   }
 
-  emit(agent) {
+  refreshAgent(agent) {
     agentCoordinator.syncBudget(agent);
     stateManager.emit('state_change', { type: 'agent_update', data: agent });
   }
 
+  // Legacy single-shot start: refuses while busy. Use submit() to queue instead.
   start(goal, mode = 'solo', improve = false) {
     if (this.running) return { ok: false, error: 'A run is already in progress.' };
+    const r = this.submit({ goal, mode, improve });
+    return r.ok ? { ok: true } : r;
+  }
+
+  // Starts now if idle, otherwise waits in line. "ahead" = goals that run before this one.
+  submit({ goal, mode = 'solo', improve = false, owner = 'web' }) {
     goal = String(goal || '').trim().slice(0, 600);
     if (!goal) return { ok: false, error: 'Please describe a goal.' };
+    const job = { id: ++this.seq, goal, mode: mode === 'team' ? 'team' : 'solo', improve: !!improve, owner: String(owner), wasQueued: false };
+
+    if (!this.running) {
+      this.startJob(job);
+      return { ok: true, started: true, ahead: 0, job };
+    }
+    if (this.queue.length >= MAX_QUEUE) return { ok: false, error: `The queue is full (${MAX_QUEUE} waiting). Try again in a while.` };
+    const mine = this.queue.filter((j) => j.owner === job.owner).length;
+    if (mine >= MAX_PER_OWNER) return { ok: false, error: `You already have ${mine} goals waiting. Wait for one to start or /cancel.` };
+    job.wasQueued = true;
+    this.queue.push(job);
+    return { ok: true, queued: true, ahead: this.queue.length, job };
+  }
+
+  // Remove waiting goals of one owner (or all). Returns how many were removed.
+  cancelQueued(owner = null) {
+    const before = this.queue.length;
+    this.queue = owner == null ? [] : this.queue.filter((j) => j.owner !== String(owner));
+    return before - this.queue.length;
+  }
+
+  next() {
+    if (this.running) return;
+    const job = this.queue.shift();
+    if (job) this.startJob(job);
+  }
+
+  startJob(job) {
+    const { goal, mode, improve } = job;
     // Every goal gets its own folder so earlier projects are never overwritten.
     // "improve" reuses the previous project's folder on purpose.
     const reuse = improve && this.dir && fs.existsSync(path.join(WORKSPACE, this.dir)) ? this.dir : null;
@@ -103,18 +149,28 @@ class Runner {
     const dir = reuse || `${slug}-${stamp}`;
     fs.mkdirSync(path.join(WORKSPACE, dir), { recursive: true });
 
-    const keepDir = dir;
     this.reset();
-    this.dir = keepDir;
+    this.dir = dir;
+    this.job = job;
     this.running = true;
     this.goal = goal;
-    this.mode = mode === 'team' ? 'team' : 'solo';
+    this.mode = mode;
     this.steps = MODE_STEPS[this.mode].map((id) => ({ agent: id, label: ROLES[id].label, status: 'PENDING' }));
 
     stateManager.stats.activeSprint = goal;
     stateManager.broadcast(`🎯 New goal: "${goal}" (${this.mode === 'team' ? 'full team' : 'solo: Bob'})`, 'lead');
+    this.emit('started', { id: job.id, owner: job.owner, goal, mode, dir, wasQueued: job.wasQueued });
     this.loop().catch((e) => this.fail(e.message));
-    return { ok: true };
+  }
+
+  // Tell listeners (Telegram) the job is over, then start whoever is next in line
+  finishJob(error = null) {
+    const job = this.job;
+    this.job = null;
+    if (job) {
+      this.emit('finished', { id: job.id, owner: job.owner, goal: job.goal, mode: job.mode, dir: this.dir, files: this.listFiles(), ok: !error, error });
+    }
+    setImmediate(() => this.next());
   }
 
   stop() {
@@ -124,11 +180,13 @@ class Runner {
   }
 
   fail(msg) {
+    if (!this.running) return;
     this.error = msg;
     this.running = false;
     const step = this.steps[this.current];
     if (step) step.status = 'FAILED';
     stateManager.broadcast(`⚠️ Run stopped: ${msg}`, 'lead');
+    this.finishJob(msg);
   }
 
   async loop() {
@@ -140,11 +198,13 @@ class Runner {
       const ok = await this.runStep(step);
       if (!ok) return;
       step.status = 'DONE';
+      this.emit('step', { owner: this.job?.owner, goal: this.goal, done: i + 1, total: this.steps.length, agent: step.agent, label: step.label });
     }
     this.running = false;
     this.current = this.steps.length;
     stateManager.broadcast(`✅ Goal finished. Open the result from the goal bar. Files: ${this.listFiles().join(', ') || 'none'}`, 'lead');
     stateManager.saveStateToFile();
+    this.finishJob(null);
   }
 
   runStep(step) {
@@ -154,7 +214,7 @@ class Runner {
     const { task } = stateManager.assignTask(step.agent, `${role.label}: ${this.goal.slice(0, 50)}`, prompt.slice(0, 120), role.category);
     agent.screen.lines = [`// ${agent.name} is starting...`];
     agent.screen.thoughts = 'Reading the goal...';
-    this.emit(agent);
+    this.refreshAgent(agent);
 
     const model = process.env.CLAUDE_RUN_MODEL || (llmProvider.ecoMode ? 'sonnet' : 'opus');
     const args = [
@@ -212,7 +272,7 @@ class Runner {
               task.progress = Math.min(90, (task.progress || 10) + 8);
             }
           }
-          this.emit(agent);
+          this.refreshAgent(agent);
         } else if (ev.type === 'result') {
           const u = ev.usage || {};
           const used = (u.input_tokens || 0) + (u.output_tokens || 0);
@@ -251,7 +311,7 @@ class Runner {
         agent.state = failedMsg || code ? 'IDLE' : 'IDLE';
         agent.currentTask = 'Idle — Awaiting instructions from lead';
         agent.status = failedMsg || code ? 'Stopped' : 'Finished my part';
-        this.emit(agent);
+        this.refreshAgent(agent);
         stateManager.saveStateToFile();
         if (this.cancelled) { this.fail('Cancelled.'); return resolve(false); }
         if (failedMsg || code) {

@@ -49,6 +49,7 @@ export class GoalPanel {
     this.draft = '';
     const r = await this.api('/api/run', { goal, mode: this.mode, improve: this.improve });
     if (!r.ok) this.flash = r.error;
+    else if (r.queued) this.flash = `Queued: ${r.ahead} goal(s) ahead of yours.`;
     await this.poll();
   }
 
@@ -71,13 +72,27 @@ export class GoalPanel {
           return `<button data-agent="${st.agent}" class="goal-step px-2 py-1 rounded border text-[11px] ${border} bg-slate-900 hover:bg-slate-800" title="Open monitor">${ICON[st.status] || '⚪'} ${this.esc(st.agent)} · ${this.esc(st.label)}</button>`;
         })
         .join('');
+      const queueList = s.queue?.length
+        ? `<div class="mt-1.5 text-[11px] text-slate-400">⏳ Waiting: ${s.queue.map((j, i) => `${i + 2}. ${this.esc(j.goal.slice(0, 40))}${j.owner !== 'web' ? ' (phone)' : ''}`).join(' · ')}</div>`
+        : '';
       body = `
         <div class="flex items-center justify-between mb-1.5">
           <div class="text-xs text-slate-200 truncate">🎯 <strong>${this.esc(s.goal)}</strong></div>
           <button id="goal-stop" class="ml-2 px-2 py-0.5 rounded bg-rose-900/80 hover:bg-rose-700 text-rose-100 text-[11px]">■ Stop</button>
         </div>
         <div class="flex flex-wrap gap-1.5">${chips}</div>
-        <div class="text-[10px] text-slate-500 mt-1.5">Click an agent to watch their screen. Files appear in the workspace folder.</div>`;
+        <div class="text-[10px] text-slate-500 mt-1.5">Click an agent to watch their screen. Files appear in the workspace folder.</div>
+        ${queueList}
+        ${this.flash ? `<div class="mt-1.5 text-xs text-amber-300">${this.esc(this.flash)}</div>` : ''}
+        <div class="flex items-center gap-1.5 mt-2">
+          <input id="goal-input" type="text" maxlength="300" placeholder="Add another goal to the queue..." class="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500">
+          <div class="flex rounded overflow-hidden border border-slate-700 text-[11px]">
+            <button id="goal-solo" class="px-2 py-1.5 ${this.mode === 'solo' ? 'bg-cyan-700 text-white' : 'bg-slate-900 text-slate-400'}">Solo</button>
+            <button id="goal-team" class="px-2 py-1.5 ${this.mode === 'team' ? 'bg-cyan-700 text-white' : 'bg-slate-900 text-slate-400'}">Team</button>
+          </div>
+          <button id="goal-run" class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold">＋ Queue</button>
+        </div>`;
+      this.flash = null;
     } else {
       const done = s && s.goal && !s.error && s.steps.length > 0 && s.current >= s.steps.length;
       const hasIndex = s?.files?.includes('index.html');

@@ -53,6 +53,25 @@ await wait(() => !runner.running);
 assert.strictEqual(runner.status().dir, secondDir, 'improve reuses the previous folder');
 console.log('  ✓');
 
+console.log('▶ Queue: goals wait in order, limits apply, cancel works');
+const order = [];
+runner.on('finished', (e) => order.push(e.goal));
+const r1 = runner.submit({ goal: 'q one', owner: 'a' });
+assert(r1.started && r1.ahead === 0);
+const r2 = runner.submit({ goal: 'q two', owner: 'b' });
+assert(r2.queued && r2.ahead === 1);
+const r3 = runner.submit({ goal: 'q three', owner: 'b' });
+assert(r3.queued && r3.ahead === 2);
+const r4 = runner.submit({ goal: 'q four', owner: 'b' });
+assert.strictEqual(r4.ok, false, 'per-owner limit');
+assert.strictEqual(runner.status().queue.length, 2);
+assert.strictEqual(runner.cancelQueued('b'), 2, 'cancel removes only that owners goals');
+runner.submit({ goal: 'q five', owner: 'c' });
+runner.submit({ goal: 'q six', owner: 'c' });
+await wait(() => !runner.running && runner.queue.length === 0, 30000);
+assert.deepStrictEqual(order, ['q one', 'q five', 'q six'], 'runs in submit order, cancelled goals never run');
+console.log('  ✓');
+
 console.log('▶ Budget: exhausted agent spends nothing and cache serves repeats');
 llmProvider.setBudget('echo', 400000, 400000);
 const r = await llmProvider.generateAgentTurn('echo', 'please analyse the architecture in detail');

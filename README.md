@@ -45,7 +45,12 @@ Send plain text and the bot asks with buttons: **ðŸ‘¤ Solo** (Bob, fastest), **ð
 | `/team <goal>` | full five-agent team |
 | `/improve <text>` | keep working on the previous project |
 | `/shot` | screenshot of the latest project |
-| `/status`, `/stop` | progress / cancel |
+| `/status` | your goals and your place in line |
+| `/queue` | everything running and waiting |
+| `/cancel` | remove your waiting goals |
+| `/stop` | cancel the running goal (yours; the first allowed chat can stop anyone's) |
+
+**Friends and the queue.** Goals run one at a time. If someone sends a goal while another is running, it waits in line ("you are number 2"), starts by itself, and the bot messages that person when it is their turn. Everyone gets their own progress and their own screenshot. Limits: 5 goals waiting in total, 2 per person. To add a friend: they message the bot, it replies with their chat id, you add it to `TELEGRAM_ALLOWED_CHAT_IDS` (comma separated) and restart. Remember that every build uses your Claude plan.
 
 Notes: only chats listed in `TELEGRAM_ALLOWED_CHAT_IDS` can give orders (everyone else is refused), because every goal spends your Claude plan and writes files on your computer. The workroom must be running on your computer. Screenshots use the Chrome or Edge you already have installed (`BROWSER_BIN` to override); they show the first screen of `index.html`, so a game is shown at its start state. WhatsApp is not supported: it needs a business account and a public webhook, which does not fit a local app.
 

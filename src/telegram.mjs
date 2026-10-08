@@ -12,8 +12,10 @@ const HELP = [
   '/team <goal>      full team (about 5x the tokens)',
   '/improve <text>   keep working on the previous project',
   '/shot             screenshot of the latest project',
-  '/status           what is happening now',
-  '/stop             cancel the current run',
+  '/status           your goals and where they are in line',
+  '/queue            everything running and waiting',
+  '/cancel           remove your waiting goals',
+  '/stop             cancel the running goal (yours only)',
   '',
   'Tip: be concrete, e.g. "a snake game with score and speed levels".'
 ].join('\n');
@@ -37,9 +39,16 @@ export class TelegramBot {
     this.api = api || this.realApi.bind(this);
     this.offset = 0;
     this.stopped = false;
-    this.watching = null; // chat currently waiting for a result
+    this.admin = [...this.allowed][0] || null; // the first allowed chat may stop anyone's run
     this.pending = new Map(); // id -> { chat, goal } waiting for the Solo/Team choice
     this.nextId = 1;
+    // The runner tells us when a goal starts, progresses and ends, so each person gets their own results
+    this.listeners = {
+      started: (e) => this.onStarted(e),
+      step: (e) => this.onStep(e),
+      finished: (e) => this.onFinished(e)
+    };
+    if (this.run.on) for (const [ev, fn] of Object.entries(this.listeners)) this.run.on(ev, fn);
   }
 
   async realApi(method, payload = {}, files = null) {
@@ -71,6 +80,7 @@ export class TelegramBot {
 
   stop() {
     this.stopped = true;
+    if (this.run.off) for (const [ev, fn] of Object.entries(this.listeners)) this.run.off(ev, fn);
   }
 
   async loop() {
@@ -103,8 +113,16 @@ export class TelegramBot {
     const arg = rest.join(' ').trim();
 
     if (cmd === '/start' || cmd === '/help') return this.say(chat, HELP);
-    if (cmd === '/status') return this.say(chat, this.statusText());
+    if (cmd === '/status') return this.say(chat, this.statusText(chat));
+    if (cmd === '/queue') return this.say(chat, this.queueText(chat));
+    if (cmd === '/cancel') {
+      const n = this.run.cancelQueued(chat);
+      return this.say(chat, n ? `Removed ${n} waiting goal(s).` : 'You have nothing waiting.');
+    }
     if (cmd === '/stop') {
+      const s = this.run.status();
+      if (!s.running) return this.say(chat, 'Nothing is running.');
+      if (s.owner !== chat && chat !== this.admin) return this.say(chat, 'That goal belongs to someone else, so I will not stop it.');
       this.run.stop();
       return this.say(chat, 'Stopping...');
     }
@@ -123,13 +141,15 @@ export class TelegramBot {
   }
 
   async begin(chat, goal, mode, improve) {
-    const r = this.run.start(goal, mode, improve);
+    const r = this.run.submit({ goal, mode, improve, owner: chat });
     if (!r.ok) return this.say(chat, `Cannot start: ${r.error}`);
-    await this.say(
-      chat,
-      `On it (${mode === 'team' ? 'full team' : 'solo: Bob'}${improve ? ', improving the previous project' : ''}): "${goal.slice(0, 120)}"\nI will send a screenshot when it is done.`
-    );
-    this.watch(chat);
+    const what = `${mode === 'team' ? 'full team' : 'solo: Bob'}${improve ? ', improving the previous project' : ''}`;
+    if (r.queued) {
+      return this.say(chat, `Queued (${what}): "${goal.slice(0, 120)}"
+${r.ahead} goal(s) ahead of you, you are number ${r.ahead + 1}. I will message you when it starts.`);
+    }
+    return this.say(chat, `On it (${what}): "${goal.slice(0, 120)}"
+I will send a screenshot when it is done.`);
   }
 
   askMode(chat, goal) {
@@ -169,44 +189,63 @@ export class TelegramBot {
     return this.begin(chat, entry.goal, m[2], m[3] === '+');
   }
 
-  statusText() {
+  statusText(chat) {
     const s = this.run.status();
+    const lines = [];
     if (s.running) {
       const step = s.steps[s.current];
-      return `Working on "${s.goal}"\nStep ${s.current + 1}/${s.steps.length}: ${step?.agent} (${step?.label})`;
+      const mine = s.owner === chat ? ' (yours)' : '';
+      lines.push(`Running${mine}: "${s.goal}"
+Step ${s.current + 1}/${s.steps.length}: ${step?.agent} (${step?.label})`);
     }
+    s.queue.forEach((j, i) => {
+      if (j.owner === chat) lines.push(`Your goal "${j.goal.slice(0, 60)}" is number ${i + 2} in line.`);
+    });
+    if (s.queue.length) lines.push(`${s.queue.length} waiting in total.`);
+    if (lines.length) return lines.join('\n');
     if (s.error) return `Last run stopped: ${s.error}`;
     if (s.dir) return `Idle. Latest project: ${s.dir} (${s.files.length} files). Send /shot for a screenshot.`;
     return 'Idle. Send me a goal.';
   }
 
-  // Report progress per finished step, then the screenshot
-  watch(chat) {
-    if (this.watching) return;
-    this.watching = chat;
-    let lastDone = 0;
-    const tick = async () => {
-      const s = this.run.status();
-      const done = s.steps.filter((x) => x.status === 'DONE').length;
-      if (s.running && s.steps.length > 1 && done > lastDone) {
-        lastDone = done;
-        await this.say(chat, `Progress ${done}/${s.steps.length}: ${s.steps[done - 1].agent} finished (${s.steps[done - 1].label}).`);
-      }
-      if (s.running) return setTimeout(tick, 3000);
-      this.watching = null;
-      if (s.error) return this.say(chat, `Stopped: ${s.error}`);
-      await this.say(chat, `Done: "${s.goal}" (${s.files.length} files).`);
-      await this.sendShot(chat);
-    };
-    setTimeout(tick, 3000);
+  queueText(chat) {
+    const s = this.run.status();
+    if (!s.running && !s.queue.length) return 'Nothing running and nothing waiting.';
+    const who = (o) => (o === chat ? ' (you)' : '');
+    const lines = [];
+    if (s.running) lines.push(`1. running${who(s.owner)}: ${s.goal.slice(0, 70)}`);
+    s.queue.forEach((j, i) => lines.push(`${i + 2}. waiting${who(j.owner)}: ${j.goal.slice(0, 70)}`));
+    return lines.join('\n');
+  }
+
+  // --- runner events: every person gets their own progress and result ---
+  isMine(owner) {
+    return this.allowed.has(String(owner));
+  }
+
+  onStarted(e) {
+    if (e.wasQueued && this.isMine(e.owner)) this.say(e.owner, `Your turn: starting "${e.goal.slice(0, 120)}" now.`);
+  }
+
+  onStep(e) {
+    if (this.isMine(e.owner) && e.total > 1 && e.done < e.total) {
+      this.say(e.owner, `Progress ${e.done}/${e.total}: ${e.agent} finished (${e.label}).`);
+    }
+  }
+
+  async onFinished(e) {
+    if (!this.isMine(e.owner)) return;
+    if (!e.ok) return this.say(e.owner, `Stopped: ${e.error}`);
+    await this.say(e.owner, `Done: "${e.goal.slice(0, 120)}" (${e.files.length} files).`);
+    await this.sendShot(e.owner, e);
   }
 
   phoneBase() {
     return phoneBase(this.port);
   }
 
-  async sendShot(chat) {
-    const s = this.run.status();
+  async sendShot(chat, snap = null) {
+    const s = snap || this.run.status();
     if (!s.dir || !s.files.includes('index.html')) return this.say(chat, 'Nothing to show yet: there is no project with an index.html.');
     try {
       const png = await this.shoot(`http://127.0.0.1:${this.port}/workspace/${encodeURIComponent(s.dir)}/index.html`);
