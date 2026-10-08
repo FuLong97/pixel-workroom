@@ -37,15 +37,26 @@ Send a goal to your own Telegram bot and get a **screenshot of the result** back
 3. Run `npm run telegram:setup`, then message your bot once. It saves your chat id into `.env` for you. Restart the workroom.
 4. Send a goal. You get progress messages and, when finished, a screenshot.
 
+Send plain text and the bot asks with buttons: **👤 Solo** (Bob, fastest), **👥 Team** (5 agents), or, once a project exists, **🔁 improve previous** (solo or team). After the build you get the screenshot **and a link you can open on your iPhone**.
+
 | Message | Effect |
 |---|---|
-| any text | build solo (Bob) |
+| any text | bot asks Solo or Team |
 | `/team <goal>` | full five-agent team |
 | `/improve <text>` | keep working on the previous project |
 | `/shot` | screenshot of the latest project |
 | `/status`, `/stop` | progress / cancel |
 
 Notes: only chats listed in `TELEGRAM_ALLOWED_CHAT_IDS` can give orders (everyone else is refused), because every goal spends your Claude plan and writes files on your computer. The workroom must be running on your computer. Screenshots use the Chrome or Edge you already have installed (`BROWSER_BIN` to override); they show the first screen of `index.html`, so a game is shown at its start state. WhatsApp is not supported: it needs a business account and a public webhook, which does not fit a local app.
+
+## Open results on your iPhone
+
+The server prints your Wi-Fi address on start (`📱 Phone (same Wi-Fi) opens finished projects at: http://192.168.x.x:3333/workspace/<project>/`). The Telegram bot and the goal bar send you the full link after each build. Open it in Safari while your iPhone is on the **same Wi-Fi**. Builds are asked to be phone-friendly (viewport, touch controls, big tap targets).
+
+- **Only finished projects are shared.** The control UI, API and WebSocket answer only on this computer, so nobody on your network can start builds. Anyone on your Wi-Fi who has the project link can view that project.
+- **Windows Firewall:** the first start shows an "Allow access" prompt for Node.js; allow it for **private networks**.
+- **Not on your Wi-Fi (mobile data, away from home)?** The local address will not work. Install [Tailscale](https://tailscale.com) on the PC and the iPhone, then set `PUBLIC_HOST` to the PC's Tailscale IP.
+- `LAN_SHARE=0` turns sharing off completely.
 
 ## Controls
 

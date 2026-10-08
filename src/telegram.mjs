@@ -3,11 +3,12 @@
 import fs from 'fs';
 import { runner } from './runner.mjs';
 import { screenshot } from './screenshot.mjs';
+import { phoneBase } from './network.mjs';
 
 const HELP = [
   'Send me what to build and I will build it, then send you a screenshot.',
   '',
-  'Any text   build it solo (Bob)',
+  'Any text   I ask: Solo or Team?',
   '/team <goal>      full team (about 5x the tokens)',
   '/improve <text>   keep working on the previous project',
   '/shot             screenshot of the latest project',
@@ -37,6 +38,8 @@ export class TelegramBot {
     this.offset = 0;
     this.stopped = false;
     this.watching = null; // chat currently waiting for a result
+    this.pending = new Map(); // id -> { chat, goal } waiting for the Solo/Team choice
+    this.nextId = 1;
   }
 
   async realApi(method, payload = {}, files = null) {
@@ -73,10 +76,11 @@ export class TelegramBot {
   async loop() {
     while (!this.stopped) {
       try {
-        const updates = await this.api('getUpdates', { offset: this.offset, timeout: 25, allowed_updates: ['message'] });
+        const updates = await this.api('getUpdates', { offset: this.offset, timeout: 25, allowed_updates: ['message', 'callback_query'] });
         for (const u of updates) {
           this.offset = u.update_id + 1;
           if (u.message?.text) await this.handle(u.message).catch((e) => console.warn('[telegram]', e.message));
+          else if (u.callback_query) await this.handleChoice(u.callback_query).catch((e) => console.warn('[telegram]', e.message));
         }
       } catch (e) {
         console.warn('[telegram] polling error:', e.message);
@@ -113,10 +117,56 @@ export class TelegramBot {
 
     if (!goal) return this.say(chat, 'Please add a goal, e.g. /team a pixel-art drawing app');
 
+    // /team and /improve already say what they want; plain text asks first
+    if (cmd === '/team' || cmd === '/improve') return this.begin(chat, goal, mode, improve);
+    return this.askMode(chat, goal);
+  }
+
+  async begin(chat, goal, mode, improve) {
     const r = this.run.start(goal, mode, improve);
     if (!r.ok) return this.say(chat, `Cannot start: ${r.error}`);
-    await this.say(chat, `On it (${mode === 'team' ? 'full team' : 'solo: Bob'}): "${goal.slice(0, 120)}"\nI will send a screenshot when it is done.`);
+    await this.say(
+      chat,
+      `On it (${mode === 'team' ? 'full team' : 'solo: Bob'}${improve ? ', improving the previous project' : ''}): "${goal.slice(0, 120)}"\nI will send a screenshot when it is done.`
+    );
     this.watch(chat);
+  }
+
+  askMode(chat, goal) {
+    const id = this.nextId++;
+    this.pending.set(id, { chat, goal });
+    if (this.pending.size > 20) this.pending.delete(this.pending.keys().next().value);
+    const rows = [
+      [
+        { text: '👤 Solo (Bob, fastest)', callback_data: `pick:${id}:solo` },
+        { text: '👥 Team (5 agents)', callback_data: `pick:${id}:team` }
+      ]
+    ];
+    if (this.run.status().dir) {
+      rows.push([
+        { text: '🔁 Solo: improve previous', callback_data: `pick:${id}:solo+` },
+        { text: '🔁 Team: improve previous', callback_data: `pick:${id}:team+` }
+      ]);
+    }
+    rows.push([{ text: '✖ Cancel', callback_data: `pick:${id}:cancel` }]);
+    return this.api('sendMessage', {
+      chat_id: chat,
+      text: `"${goal.slice(0, 160)}"\n\nHow should I build it?\nSolo = one agent, fast and cheap. Team = plan, build, logic, QA, docs (about 5x the tokens).`,
+      reply_markup: { inline_keyboard: rows }
+    });
+  }
+
+  async handleChoice(q) {
+    const chat = String(q.message?.chat?.id ?? q.from?.id);
+    await this.api('answerCallbackQuery', { callback_query_id: q.id }).catch(() => {});
+    if (!this.allowed.has(chat)) return;
+    const m = /^pick:(\d+):(solo|team|cancel)(\+?)$/.exec(q.data || '');
+    if (!m) return;
+    const entry = this.pending.get(Number(m[1]));
+    if (!entry || entry.chat !== chat) return this.say(chat, 'That request expired. Please send your goal again.');
+    this.pending.delete(Number(m[1]));
+    if (m[2] === 'cancel') return this.say(chat, 'Cancelled.');
+    return this.begin(chat, entry.goal, m[2], m[3] === '+');
   }
 
   statusText() {
@@ -151,12 +201,20 @@ export class TelegramBot {
     setTimeout(tick, 3000);
   }
 
+  phoneBase() {
+    return phoneBase(this.port);
+  }
+
   async sendShot(chat) {
     const s = this.run.status();
     if (!s.dir || !s.files.includes('index.html')) return this.say(chat, 'Nothing to show yet: there is no project with an index.html.');
     try {
       const png = await this.shoot(`http://127.0.0.1:${this.port}/workspace/${encodeURIComponent(s.dir)}/index.html`);
-      await this.api('sendPhoto', { chat_id: chat, caption: s.goal.slice(0, 200) }, { photo: { path: png, name: 'result.png' } });
+      const sent = await this.api('sendPhoto', { chat_id: chat, caption: s.goal.slice(0, 200) }, { photo: { path: png, name: 'result.png' } });
+      console.log(`[telegram] screenshot delivered to chat ${chat} (message_id ${sent?.message_id ?? '?'})`);
+      const base = this.phoneBase();
+      if (base) await this.say(chat, `📱 Open it on your iPhone (same Wi-Fi):
+${base}/workspace/${encodeURIComponent(s.dir)}/index.html`);
     } catch (e) {
       await this.say(chat, `Built it, but the screenshot failed: ${e.message}`);
     }

@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { findBrowser } from '../src/screenshot.mjs';
+import { lanAddresses } from '../src/network.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 if (!findBrowser()) { console.log('⏭  no Chrome/Edge found, skipping e2e'); process.exit(0); }
@@ -75,10 +76,14 @@ try {
   await wait(() => { try { return fs.existsSync(tmp); } catch { return false; } }, 5000, 'tmp');
   await new Promise((r) => setTimeout(r, 1500));
 
-  console.log('▶ e2e: message "a snake game" arrives via (fake) Telegram long polling');
+  console.log('▶ e2e: message "a snake game" arrives, bot offers Solo/Team, a tap starts the build');
   queue.push({ update_id: updateId++, message: { chat: { id: CHAT }, text: 'a snake game' } });
+  await wait(() => sent.some((s) => s.reply_markup), 15000, 'Solo/Team keyboard');
+  const kb = sent.find((s) => s.reply_markup).reply_markup.inline_keyboard.flat();
+  const soloBtn = kb.find((b) => b.text.startsWith('👤'));
+  queue.push({ update_id: updateId++, callback_query: { id: 'q1', data: soloBtn.callback_data, message: { chat: { id: CHAT } } } });
   await wait(() => sent.some((s) => s.method === 'sendMessage' && s.text?.startsWith('On it')), 15000, 'acknowledgement');
-  console.log('  ✓ bot acknowledged');
+  console.log('  ✓ keyboard offered, tap accepted, bot acknowledged');
 
   await wait(() => sent.some((s) => s.method === 'sendPhoto'), 60000, 'screenshot upload');
   const photo = sent.find((s) => s.method === 'sendPhoto');
@@ -86,6 +91,22 @@ try {
   assert(photo.png, 'uploaded bytes must contain a PNG');
   assert(photo.bytes > 2000, 'screenshot should not be empty');
   console.log(`  ✓ real Chrome/Edge screenshot uploaded (${photo.bytes} bytes, PNG, multipart)`);
+
+  await wait(() => sent.some((s) => s.text?.includes('Open it on your iPhone')), 15000, 'phone link');
+  const link = sent.find((s) => s.text?.includes('Open it on your iPhone')).text.match(/http:\/\/\S+/)[0];
+  console.log('  ✓ phone link sent:', link);
+
+  const lan = lanAddresses()[0];
+  if (lan) {
+    console.log('▶ e2e: the Wi-Fi address only shows finished projects');
+    const via = (p, init) => fetch(`http://${lan.ip}:${PORT}${p}`, init).then((r) => r.status);
+    const dir = link.split('/workspace/')[1].split('/')[0];
+    assert.strictEqual(await via(`/workspace/${dir}/index.html`), 200, 'project visible from the network');
+    assert.strictEqual(await via('/'), 403, 'control UI hidden from the network');
+    assert.strictEqual(await via('/api/state'), 403, 'API hidden from the network');
+    assert.strictEqual(await via('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"goal":"evil"}' }), 403, 'builds cannot be started from the network');
+    console.log(`  ✓ via ${lan.ip}: project 200, UI/API/run 403`);
+  }
 
   console.log('▶ e2e: stranger is refused');
   const before = sent.length;

@@ -14,6 +14,8 @@ export class GoalPanel {
     this.draft = '';
     this.flash = null;
     this.improve = false;
+    this.phone = null;
+    fetch('/api/share').then((r) => r.json()).then((j) => { this.phone = j.base; this.render(); }).catch(() => {});
     this.render();
     this.poll();
   }
@@ -82,7 +84,7 @@ export class GoalPanel {
       const origin = `http://127.0.0.1:${location.port}`;
       const result = done
         ? `<div class="flex items-center justify-between mb-2 p-2 rounded bg-emerald-950/60 border border-emerald-700 text-xs text-emerald-200">
-            <span>✅ Done: <strong>${this.esc(s.goal)}</strong> · ${s.files.length} file(s)</span>
+            <span>✅ Done: <strong>${this.esc(s.goal)}</strong> · ${s.files.length} file(s)${this.phone && hasIndex ? `<br><span class="text-[10px] text-emerald-300">📱 iPhone (same Wi-Fi): <code>${this.esc(this.phone)}/workspace/${this.esc(s.dir)}/</code></span>` : ''}</span>
             ${hasIndex ? `<a href="${origin}/workspace/${this.esc(s.dir)}/index.html" target="_blank" rel="noopener" class="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">▶ Open result</a>` : ''}
           </div>`
         : '';

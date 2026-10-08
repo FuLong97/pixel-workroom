@@ -9,6 +9,7 @@ import { agentCoordinator } from './agent-coordinator.mjs';
 import { llmProvider } from './llm-provider.mjs';
 import { runner, WORKSPACE } from './runner.mjs';
 import { startTelegramFromEnv } from './telegram.mjs';
+import { phoneBase, isLoopback } from './network.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,7 +26,8 @@ function loadEnv() {
       if (match) {
         let val = match[2] ? match[2].trim() : '';
         if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
-        process.env[match[1]] = val;
+        // real environment wins over .env (tests and CI rely on this)
+        if (process.env[match[1]] === undefined) process.env[match[1]] = val;
       }
     });
   }
@@ -64,6 +66,17 @@ const server = http.createServer((req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
+
+  // Anything that is not this computer (e.g. your iPhone on the Wi-Fi) may only VIEW generated projects.
+  // The control UI, the API and the runner stay local, so nobody on the network can start builds.
+  if (!isLoopback(req.socket.remoteAddress)) {
+    const viewOnly = (req.method === 'GET' || req.method === 'HEAD') && pathname.startsWith('/workspace/');
+    if (!viewOnly) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Only generated projects are shared on the network.');
+      return;
+    }
+  }
 
   // Generated apps are served from the 127.0.0.1 origin; the control UI lives on localhost.
   // Refuse any API call whose Origin is not the UI itself so generated pages cannot drive the runner.
@@ -140,6 +153,11 @@ function parseJsonBody(req) {
 
 async function handleApiRequest(req, res, pathname, url) {
   try {
+    if (pathname === '/api/share' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ base: phoneBase(PORT) }));
+      return;
+    }
     if (pathname === '/api/run' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(runner.status()));
@@ -279,6 +297,7 @@ async function handleApiRequest(req, res, pathname, url) {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws, req) => {
+  if (!isLoopback(req.socket.remoteAddress)) { ws.close(); return; }
   // Only the control UI may talk to the room over WebSocket
   if (req.headers.origin && req.headers.origin !== `http://localhost:${PORT}`) { ws.close(); return; }
   // Send full initial state upon connection
@@ -345,10 +364,13 @@ stateManager.on('state_change', (change) => {
 });
 
 // Start listening
-server.listen(PORT, () => {
+const HOST = process.env.LAN_SHARE === '0' ? '127.0.0.1' : '0.0.0.0';
+server.listen(PORT, HOST, () => {
   startTelegramFromEnv(PORT);
   console.log(`====================================================`);
   console.log(`🎮 Pixel Workroom 3D Server running at: http://localhost:${PORT}`);
   console.log(`🔌 MCP Stdio Bridge active | WebSockets listening`);
+  const phone = phoneBase(PORT);
+  console.log(phone ? `📱 Phone (same Wi-Fi) opens finished projects at: ${phone}/workspace/<project>/` : '📱 Phone sharing is off (LAN_SHARE=0 or no network found)');
   console.log(`====================================================`);
 });
