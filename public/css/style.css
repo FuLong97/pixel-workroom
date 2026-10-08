@@ -83,3 +83,77 @@ body {
 .pulse-led {
   animation: pulseGlow 2s infinite ease-in-out;
 }
+
+/* ---------- Polish pass ---------- */
+::selection { background: rgba(34, 211, 238, 0.35); }
+
+/* Header: layered glass bar with a soft glow line */
+header {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(8, 12, 24, 0.92)) !important;
+  box-shadow: 0 1px 0 rgba(34, 211, 238, 0.18), 0 8px 24px rgba(0, 0, 0, 0.45);
+  position: relative;
+  z-index: 20;
+}
+header .font-pixel {
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.55);
+  letter-spacing: 0.08em;
+}
+
+/* Buttons: smooth hover, press feedback, visible keyboard focus */
+button {
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
+}
+button:not(:disabled):hover { box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.25), 0 4px 14px rgba(0, 0, 0, 0.35); }
+button:not(:disabled):active { transform: translateY(1px) scale(0.99); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid #22d3ee;
+  outline-offset: 2px;
+}
+input, textarea, select { transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+input:focus, textarea:focus, select:focus { box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.14); }
+
+/* The room view: framed like a monitor */
+main { background: radial-gradient(ellipse at center, #05070c 0%, #000 75%) !important; }
+#render-canvas {
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.18), 0 0 80px rgba(34, 211, 238, 0.07), inset 0 0 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Goal dock: frosted glass with a coloured edge */
+#goal-dock {
+  background: linear-gradient(160deg, rgba(15, 23, 42, 0.88), rgba(8, 14, 30, 0.82)) !important;
+  border: 1px solid rgba(34, 211, 238, 0.35) !important;
+  border-radius: 14px !important;
+  backdrop-filter: blur(14px) saturate(1.3);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03) inset, 0 0 28px rgba(34, 211, 238, 0.08);
+}
+
+/* Windows pop in instead of appearing */
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.975); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+#intercom-modal, #monitor-cockpit { animation: fadeIn 0.16s ease-out; }
+#intercom-modal > div, #monitor-cockpit > div {
+  animation: popIn 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7), 0 0 60px rgba(34, 211, 238, 0.12);
+  border-radius: 16px !important;
+}
+
+/* Status chip and pills */
+#status-indicator { box-shadow: 0 0 12px rgba(34, 197, 94, 0.25); border-radius: 999px; padding-left: 10px; padding-right: 10px; }
+#token-hud { background: rgba(15, 23, 42, 0.6); border-radius: 999px; }
+#token-hud-bar { transition: width 0.4s ease, background-color 0.3s ease; box-shadow: 0 0 8px currentColor; }
+
+/* Monitor window: CRT scanlines and a soft phosphor glow on the editor text */
+#mon-editor-lines { text-shadow: 0 0 6px rgba(74, 222, 128, 0.35); }
+#monitor-cockpit .overflow-y-auto { background-image: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.015) 0 1px, transparent 1px 3px); }
+#mon-agent-energy { transition: width 0.4s ease; box-shadow: 0 0 10px rgba(34, 197, 94, 0.6); }
+
+/* Chat bubbles and whiteboard cards get a little depth */
+#chat-feed > div, #tab-whiteboard > div > div { transition: transform 0.15s ease, border-color 0.15s ease; }
+#chat-feed > div:hover { border-color: rgba(34, 211, 238, 0.35); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

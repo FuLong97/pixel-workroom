@@ -9,16 +9,17 @@ import { stateManager } from './state.mjs';
 import { agentCoordinator } from './agent-coordinator.mjs';
 import { llmProvider } from './llm-provider.mjs';
 import { backendOrder, backendName, buildArgs, isQuotaError, resolveBackend } from './backends.mjs';
+import { detectLocal, pickToolModel } from './local.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const WORKSPACE = process.env.WORKROOM_WORKSPACE || path.join(__dirname, '..', 'workspace');
 
 const ROLES = {
-  alice: { label: 'Plan', category: 'Core', prompt: (g) => `You are Alice, systems architect. Goal: "${g}". Write a SHORT PLAN.md (max 25 lines): file list, features, how it runs in a browser with no build step. Do not write any other file.` },
-  bob: { label: 'Build', category: 'Frontend', prompt: (g, team) => `You are Bob, frontend engineer. Goal: "${g}". ${team ? 'Follow PLAN.md. ' : ''}Build it as a working, self-contained browser app: index.html plus optional style.css/app.js, no external build step, no network dependencies. Keep it compact and polished. Open-ready: index.html must run by double-clicking. It MUST also work on an iPhone (Safari): include <meta name="viewport" content="width=device-width, initial-scale=1">, a responsive layout, touch controls for any game (on-screen buttons or swipe, no keyboard-only input), tap targets of at least 44px, and no hover-only features.` },
+  alice: { label: 'Plan', category: 'Core', mustWrite: true, prompt: (g) => `You are Alice, systems architect. Goal: "${g}". Write a SHORT PLAN.md (max 25 lines): file list, features, how it runs in a browser with no build step. Do not write any other file.` },
+  bob: { label: 'Build', category: 'Frontend', mustWrite: true, prompt: (g, team) => `You are Bob, frontend engineer. Goal: "${g}". ${team ? 'Follow PLAN.md. ' : ''}Build it as a working, self-contained browser app: index.html plus optional style.css/app.js, no external build step, no network dependencies. Keep it compact and polished. Open-ready: index.html must run by double-clicking. It MUST also work on an iPhone (Safari): include <meta name="viewport" content="width=device-width, initial-scale=1">, a responsive layout, touch controls for any game (on-screen buttons or swipe, no keyboard-only input), tap targets of at least 44px, and no hover-only features.` },
   charlie: { label: 'Logic', category: 'Backend', prompt: (g) => `You are Charlie, logic/backend engineer. Goal: "${g}". Review the existing files and improve the core logic and state handling (persistence via localStorage if useful, no bugs, clean structure). Edit existing files; do not rewrite from scratch.` },
   diana: { label: 'Test', category: 'QA', prompt: (g) => `You are Diana, QA auditor. Goal: "${g}". Read the code carefully, find real bugs or broken flows, and fix them with minimal edits. Do not add features.` },
-  echo: { label: 'Docs', category: 'Research', prompt: (g) => `You are Echo, documentation specialist. Goal: "${g}". Write a concise README.md (what it is, how to open it, controls). Do not change code.` }
+  echo: { label: 'Docs', category: 'Research', mustWrite: true, prompt: (g) => `You are Echo, documentation specialist. Goal: "${g}". Write a concise README.md (what it is, how to open it, controls). Do not change code.` }
 };
 
 const COOLDOWN_MS = (parseFloat(process.env.BACKEND_COOLDOWN_MIN) || 30) * 60 * 1000;
@@ -213,6 +214,25 @@ class Runner extends EventEmitter {
     this.finishJob(null);
   }
 
+  // File names with their change time, to prove a step really changed something
+  snapshot() {
+    const out = new Map();
+    try {
+      for (const d of fs.readdirSync(this.cwd, { recursive: true, withFileTypes: true })) {
+        if (!d.isFile()) continue;
+        const f = path.join(d.parentPath || d.path, d.name);
+        out.set(f, fs.statSync(f).mtimeMs);
+      }
+    } catch { /* empty folder */ }
+    return out;
+  }
+
+  changedSince(before) {
+    const now = this.snapshot();
+    for (const [f, t] of now) if (before.get(f) !== t) return true;
+    return false;
+  }
+
   coolingDown(kind) {
     return (this.cooldown.get(kind) || 0) > Date.now();
   }
@@ -228,6 +248,7 @@ class Runner extends EventEmitter {
     agent.screen.thoughts = 'Reading the goal...';
     this.refreshAgent(agent);
 
+    const before = this.snapshot();
     const all = backendOrder();
     // models that ran dry recently are skipped; if every one is resting, try them all again
     const order = all.filter((k) => !this.coolingDown(k));
@@ -249,8 +270,23 @@ class Runner extends EventEmitter {
         this.emit('fallback', { owner: this.job?.owner, goal: this.goal, from: previous, to: kind });
         previous = null;
       }
+      // the local model needs a running server and a model that Codex can drive
+      let opts = {};
+      if (kind === 'local') {
+        const info = await detectLocal();
+        if (!info.available) { problems.push(`no local model (${info.reason})`); continue; }
+        if (!['ollama', 'lmstudio'].includes(info.kind)) { problems.push('the local server is chat-only; builds need Ollama or LM Studio'); continue; }
+        opts = { provider: info.kind, model: pickToolModel(info) };
+        this.push(agent, `Using local model ${opts.model} (free, but slower and less capable)`);
+      }
       this.via = kind;
-      const r = await this.execBackend(kind, target, step, agent, task, prompt);
+      const r = await this.execBackend(kind, target, step, agent, task, prompt, opts);
+      if (r.ok && role.mustWrite && !this.changedSince(before)) {
+        // exit code 0 is not enough: small models sometimes "describe" the code without writing any file
+        const hint = kind === 'local' ? ' (small local models often cannot use tools; try a larger one with LOCAL_RUN_MODEL)' : '';
+        problems.push(`${backendName(kind)} finished but wrote no file${hint}`);
+        continue;
+      }
       if (r.ok) {
         this.finishStep(agent, task, true);
         return true;
@@ -291,8 +327,8 @@ class Runner extends EventEmitter {
   }
 
   // Runs one CLI for one step. Resolves { ok } or { quota } / { unavailable } / { error }.
-  execBackend(kind, target, step, agent, task, prompt) {
-    const args = [...target.prefix, ...buildArgs(kind, prompt, this.cwd)];
+  execBackend(kind, target, step, agent, task, prompt, opts = {}) {
+    const args = [...target.prefix, ...buildArgs(kind, prompt, this.cwd, opts)];
     const name = backendName(kind);
     const logFile = path.join(WORKSPACE, '..', 'run.log');
     const log = (text) => { try { fs.appendFileSync(logFile, text); } catch { /* logging is best effort */ } };

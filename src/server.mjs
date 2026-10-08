@@ -10,6 +10,7 @@ import { llmProvider } from './llm-provider.mjs';
 import { runner, WORKSPACE } from './runner.mjs';
 import { startTelegramFromEnv } from './telegram.mjs';
 import { phoneBase, isLoopback } from './network.mjs';
+import { detectLocal, pickChatModel, pickToolModel } from './local.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -153,6 +154,15 @@ function parseJsonBody(req) {
 
 async function handleApiRequest(req, res, pathname, url) {
   try {
+    if (pathname === '/api/local' && req.method === 'GET') {
+      const info = await detectLocal({ force: true });
+      const out = info.available
+        ? { available: true, kind: info.kind, base: info.base, models: info.models, chatModel: pickChatModel(info), buildModel: pickToolModel(info), canBuild: ['ollama', 'lmstudio'].includes(info.kind) }
+        : { available: false, reason: info.reason };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(out));
+      return;
+    }
     if (pathname === '/api/share' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ base: phoneBase(PORT) }));

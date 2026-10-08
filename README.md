@@ -111,10 +111,24 @@ Saving tokens without losing quality: Token Saver answers trivial messages local
 
 Nothing stops half way. If a model runs out of tokens, hits its usage limit or is rate limited, the next one takes over automatically and you are told ("Claude Code is out of tokens, continuing with Codex").
 
-- **Build button / Telegram:** tries Claude Code, then Codex, then Gemini CLI (`RUN_BACKENDS` changes the order). A model that ran dry rests for 30 minutes (`BACKEND_COOLDOWN_MIN`) so the next steps do not waste a call on it. Codex and Gemini are started with restricted rights (Codex: `workspace-write` sandbox, Gemini: file edits only), and each CLI must be installed and signed in. Models that are not installed are skipped.
+- **Build button / Telegram:** tries Claude Code, then Codex, then Gemini CLI, then a local model (`RUN_BACKENDS` changes the order). A model that ran dry rests for 30 minutes (`BACKEND_COOLDOWN_MIN`) so the next steps do not waste a call on it. Codex and Gemini are started with restricted rights (Codex: `workspace-write` sandbox, Gemini: file edits only), and each CLI must be installed and signed in. Models that are not installed are skipped.
 - **In-room agents (API keys):** the agent's own provider first, then the others that have a key (`LLM_FALLBACKS`). If every provider is dry they answer with the free local replies.
 - **Real errors are not hidden.** Only "out of tokens / limit / quota / overloaded" moves on to the next model. Anything else (a bug, a refused action) is shown as it is.
 - The per-agent **health bar** is your own spending cap and is separate from this: at 0 an agent stops using paid APIs instead of switching to another paid model.
+
+## Local models (free, private)
+
+If [Ollama](https://ollama.com) or LM Studio is running, the workroom finds it by itself (nothing to configure) and uses it for free:
+
+- **In-room agents:** a local model answers when every paid provider is out of tokens, **and when an agent's own token budget (health bar) is used up**, so agents never go silent. Local answers are never charged to a budget. Set `LLM_PRIMARY=local` to make local the first choice for all agents (no API cost at all).
+- **Build button / Telegram:** as the last step in the fallback order, Codex runs against your local model (`codex exec --oss`). Needs Codex installed and Ollama or LM Studio. **Experimental:** small models (like 8B) often explain the code instead of writing files. The runner notices this ("finished but wrote no file") and reports it instead of claiming success. Larger tool-capable models work better; pick one with `LOCAL_RUN_MODEL`.
+- The ⚙️ API Keys tab shows which local model was found.
+
+```bash
+ollama pull qwen3:8b      # small and fast, supports tools
+```
+
+Settings (all optional): `LOCAL_LLM_URL` (another server, OpenAI-compatible, e.g. `http://localhost:1234/v1`), `LOCAL_LLM_MODEL` (chat), `LOCAL_RUN_MODEL` (builds), `LOCAL_LLM_KIND=ollama|lmstudio` (when a server runs on a custom port), `LOCAL_LLM_TIMEOUT_S`, `LOCAL_LLM=0` (turn local models off).
 
 ## Configuration
 

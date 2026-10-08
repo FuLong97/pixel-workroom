@@ -81,6 +81,48 @@ r = await run('fifth app');
 assert.strictEqual(r.ok, true, r.error);
 assert.deepStrictEqual(calls().slice(b2), ['codex']);
 console.log('  ✓');
+console.log('▶ Exit code 0 is not enough: a step that must write files but wrote none is a failure');
+runner.cooldown.clear();
+process.env.RUN_BACKENDS = 'codex';
+process.env.CODEX_BIN = fx('fake-codex-silent.mjs');
+r = await run('silent app');
+assert.strictEqual(r.ok, false);
+assert(r.error.includes('finished but wrote no file'), r.error);
+console.log('  ✓');
+
+console.log('▶ Local model as the last resort: driven by Codex in --oss mode');
+const { startFakeLocal } = await import('./fixtures/fake-local-server.mjs');
+const { resetLocalCache } = await import('../src/local.mjs');
+const local = await startFakeLocal({ models: ['tiny-model'] });
+delete process.env.LOCAL_LLM;                       // setup.mjs turns local models off by default
+process.env.LOCAL_LLM_URL = local.base;
+process.env.LOCAL_LLM_KIND = 'ollama';
+resetLocalCache();
+const argsFile = path.join(os.tmpdir(), `codex-args-${Date.now()}.json`);
+process.env.ARGS_FILE = argsFile;
+process.env.RUN_BACKENDS = 'claude,local';
+process.env.CLAUDE_BIN = fx('fake-claude-quota.mjs');
+process.env.CODEX_BIN = fx('fake-codex-args.mjs');
+runner.cooldown.clear();
+r = await run('local app');
+assert.strictEqual(r.ok, true, r.error);
+const args = JSON.parse(fs.readFileSync(argsFile, 'utf8'));
+assert(args.includes('--oss') && args.includes('ollama') && args.includes('tiny-model'), args.join(' '));
+assert(args.includes('workspace-write'), 'local builds stay in the sandbox');
+assert.deepStrictEqual([fallbacks.at(-1).from, fallbacks.at(-1).to], ['claude', 'local']);
+console.log('  ✓ Claude dry -> local model (' + args.slice(0, 6).join(' ') + ' ...)');
+
+console.log('▶ No local server -> clear message');
+process.env.LOCAL_LLM = '0';
+resetLocalCache();
+runner.cooldown.clear();
+r = await run('no local app');
+assert.strictEqual(r.ok, false);
+assert(r.error.includes('no local model'), r.error);
+console.log('  ✓');
+local.close();
+await new Promise((res) => setTimeout(res, 500));
+
 
 console.log('\n🎉 FALLBACK TESTS PASSED');
 process.exit(0);

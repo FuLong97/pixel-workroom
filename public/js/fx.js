@@ -164,7 +164,9 @@ export class FloorCeilingRenderer {
           const k = light * fog;
           // sheen: glossy highlight inside each lamp pool
           const sheen = Math.max(0, light - 1.15) * 55 * fog;
-          buf[row + x] = pack(r * k * 1.05 + sheen * 1.0, g * k + sheen * 0.92, b * k * 0.98 + sheen * 0.7);
+          // cool daylight spilling in from the window wall on the left
+          const wg = fx < 7 ? (1 - fx / 7) * fog : 0;
+          buf[row + x] = pack(r * k * 1.05 + sheen + wg * 6, g * k + sheen * 0.92 + wg * 20, b * k * 0.98 + sheen * 0.7 + wg * 46);
         } else {
           const c = this.ceilTex[v * size + u];
           const { d2 } = nearestLamp(fx, fy);

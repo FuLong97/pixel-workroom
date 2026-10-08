@@ -8,7 +8,7 @@ export const QUOTA_RE =
 
 export const isQuotaError = (text = '') => QUOTA_RE.test(String(text));
 
-const NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI' };
+const NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', local: 'the local model' };
 export const backendName = (kind) => NAMES[kind] || kind;
 
 // npm global packages whose JS entry we can run directly (avoids .cmd shims and shell injection on Windows)
@@ -37,6 +37,7 @@ const ENV_BIN = { claude: 'CLAUDE_BIN', codex: 'CODEX_BIN', gemini: 'GEMINI_BIN'
 
 /** How to launch a backend: { cmd, prefix } or null when it is not installed. */
 export function resolveBackend(kind) {
+  if (kind === 'local') kind = 'codex';   // the local model is driven by Codex in --oss mode
   const override = process.env[ENV_BIN[kind]];
   if (override) {
     // an override may point at a .mjs script (used by tests so no tokens are spent)
@@ -51,7 +52,7 @@ export function resolveBackend(kind) {
 }
 
 /** Arguments for one step. All three are restricted to the project folder and cannot run shell commands freely. */
-export function buildArgs(kind, prompt, cwd) {
+export function buildArgs(kind, prompt, cwd, opts = {}) {
   if (kind === 'claude') {
     return [
       '-p', prompt,
@@ -63,6 +64,10 @@ export function buildArgs(kind, prompt, cwd) {
       '--max-turns', process.env.CLAUDE_RUN_MAX_TURNS || '30'
     ];
   }
+  if (kind === 'local') {
+    // Codex talking to Ollama / LM Studio instead of OpenAI. Same sandbox: files in the project folder only.
+    return ['exec', '--oss', '--local-provider', opts.provider || 'ollama', '-m', opts.model, '--sandbox', 'workspace-write', '--skip-git-repo-check', '-C', cwd, prompt];
+  }
   if (kind === 'codex') {
     // workspace-write: may only change files inside the project folder; no network
     return ['exec', '--sandbox', 'workspace-write', '--skip-git-repo-check', '-C', cwd, prompt];
@@ -73,6 +78,6 @@ export function buildArgs(kind, prompt, cwd) {
 
 /** Order to try backends in, e.g. "claude,codex,gemini". Unknown names are ignored. */
 export function backendOrder() {
-  const wanted = (process.env.RUN_BACKENDS || 'claude,codex,gemini').split(',').map((s) => s.trim().toLowerCase());
+  const wanted = (process.env.RUN_BACKENDS || 'claude,codex,gemini,local').split(',').map((s) => s.trim().toLowerCase());
   return wanted.filter((k, i) => NAMES[k] && wanted.indexOf(k) === i);
 }

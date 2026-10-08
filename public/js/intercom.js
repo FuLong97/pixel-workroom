@@ -179,8 +179,25 @@ export class IntercomController {
     this.closeMonitor();
   }
 
+  // Shows whether a free local model (Ollama / LM Studio) is running and which one will be used
+  async refreshLocalStatus() {
+    const el = document.getElementById('local-status');
+    if (!el) return;
+    try {
+      const l = await (await fetch('/api/local')).json();
+      el.innerHTML = l.available
+        ? `<div class="text-emerald-300 font-semibold">🟢 Local model ready (${this.escapeHtml(l.kind)})</div>
+           <div class="mt-1 text-slate-400">Chat: <strong class="text-slate-200">${this.escapeHtml(l.chatModel)}</strong> · Builds: <strong class="text-slate-200">${l.canBuild ? this.escapeHtml(l.buildModel) : 'not supported on this server'}</strong></div>
+           <div class="mt-1 text-slate-500">Free. Used automatically when paid models run out of tokens. Small models are slower and weaker, especially for builds.</div>`
+        : `<div class="text-amber-300 font-semibold">⚪ No local model</div><div class="mt-1 text-slate-500">${this.escapeHtml(l.reason || '')}. Install Ollama and run: ollama pull qwen3:8b</div>`;
+    } catch {
+      el.textContent = 'Could not check for a local model.';
+    }
+  }
+
   switchTab(tab) {
     this.activeTab = tab;
+    if (tab === 'apikeys') this.refreshLocalStatus();
     document.querySelectorAll('.tab-btn').forEach((btn) => {
       if (btn.dataset.tab === tab) {
         btn.classList.add('bg-blue-600', 'text-white');

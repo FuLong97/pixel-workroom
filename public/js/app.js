@@ -14,6 +14,8 @@ export class PixelWorkroomApp {
     this.engine = new Workroom3DEngine(this.canvas, this.assets, this.state);
     this.intercom = new IntercomController(this);
     this.goalPanel = new GoalPanel(this);
+    const hint = document.getElementById('view-hint');
+    if (hint) hint.dataset.fpv = hint.innerHTML;
 
     this.ws = null;
     this.lastTime = performance.now();

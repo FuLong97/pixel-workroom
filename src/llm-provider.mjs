@@ -1,6 +1,7 @@
 // src/llm-provider.mjs - Multi-Model Provider (Gemini, Claude, Codex/OpenAI) & Token-Saver Engine
 import https from 'https';
 import { isQuotaError } from './backends.mjs';
+import { detectLocal, localChat } from './local.mjs';
 
 const env = (k, d) => process.env[k] || d;
 
@@ -14,6 +15,7 @@ function apiError(status, json) {
 }
 
 const KEY = { gemini: 'GEMINI_API_KEY', claude: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' };
+const PROVIDERS = [...Object.keys(KEY), 'local']; // 'local' = Ollama / LM Studio, free
 const REST_MS = (parseFloat(process.env.PROVIDER_COOLDOWN_MIN) || 10) * 60 * 1000;
 const DEFAULT_BUDGET = parseInt(process.env.AGENT_TOKEN_BUDGET || '400000', 10);
 
@@ -26,7 +28,9 @@ export class LLMProviderManager {
       completionTokens: 0,
       tokensSaved: 0,
       apiCalls: 0,
-      savedApiCalls: 0
+      savedApiCalls: 0,
+      localCalls: 0,
+      localTokens: 0   // answered by a local model: free, never charged to an agent's budget
     };
 
     // Per-agent token budget (drives the in-world health bar) + response cache
@@ -49,10 +53,14 @@ export class LLMProviderManager {
     return this.ecoMode;
   }
 
-  providerChain(primary) {
-    const order = [primary, ...(process.env.LLM_FALLBACKS || 'claude,gemini,openai').split(',').map((x) => x.trim().toLowerCase())];
-    const unique = order.filter((p, i) => KEY[p] && order.indexOf(p) === i);
-    const usable = unique.filter((p) => process.env[KEY[p]]);
+  // LLM_PRIMARY=local makes every in-room agent use the free local model first
+  async providerChain(primary, localOnly = false) {
+    const localUp = (await detectLocal()).available;
+    if (localOnly) return localUp ? ['local'] : [];
+    const first = (process.env.LLM_PRIMARY || primary).toLowerCase();
+    const order = [first, ...(process.env.LLM_FALLBACKS || 'claude,gemini,openai,local').split(',').map((x) => x.trim().toLowerCase())];
+    const unique = order.filter((p, i) => PROVIDERS.includes(p) && order.indexOf(p) === i);
+    const usable = unique.filter((p) => (p === 'local' ? localUp : process.env[KEY[p]]));
     const awake = usable.filter((p) => (this.providerRest.get(p) || 0) <= Date.now());
     return awake.length ? awake : usable; // everyone resting: try again anyway
   }
@@ -60,13 +68,28 @@ export class LLMProviderManager {
   // Model to use when a provider answers on behalf of another one
   modelFor(provider) {
     const pick = Object.values(this.agentModels).find((m) => m.provider === provider);
-    return this.ecoMode ? pick.fallbackModel : pick.model;
+    return pick ? (this.ecoMode ? pick.fallbackModel : pick.model) : undefined;
   }
 
   callProvider(provider, model, persona, prompt, history, maxTokens) {
     if (provider === 'gemini') return this.callGemini(model, persona, prompt, history, maxTokens);
     if (provider === 'claude') return this.callClaude(model, persona, prompt, history, maxTokens);
+    if (provider === 'local') return this.callLocal(persona, prompt, history, maxTokens);
     return this.callOpenAI(model, persona, prompt, history, maxTokens);
+  }
+
+  // Free answer from a local model (Ollama / LM Studio)
+  async callLocal(persona, prompt, history, maxTokens) {
+    const r = await localChat({ persona, prompt, history, maxTokens });
+    this.tokenStats.localCalls++;
+    this.tokenStats.localTokens += r.tokens;
+    return {
+      text: r.text,
+      thoughts: `Answered by local model ${r.model} (free, ${r.tokens} tokens).`,
+      tokens: 0,
+      provider: 'local',
+      free: true
+    };
   }
 
   getStats() {
@@ -105,8 +128,10 @@ export class LLMProviderManager {
       return { ...this.cache.get(key), tokens: 0, cached: true };
     }
 
-    // Out of budget: stay in the room, answer locally, spend nothing
+    // Out of budget: no paid calls. A local model is free, so it may still answer; otherwise canned replies.
     if (budget.used >= budget.limit) {
+      const free = await this._generateAgentTurn(agentId, prompt, history, { localOnly: true });
+      if (free.provider === 'local') return free;
       this.tokenStats.savedApiCalls++;
       return { ...this.generateLocalSimulation(id, 'Agent', prompt), thoughts: 'Token budget exhausted - running on local heuristics.', tokens: 0 };
     }
@@ -121,7 +146,7 @@ export class LLMProviderManager {
     return result;
   }
 
-  async _generateAgentTurn(agentId, prompt, history = []) {
+  async _generateAgentTurn(agentId, prompt, history = [], opts = {}) {
     const config = this.agentModels[agentId.toLowerCase()] || {
       provider: 'gemini',
       model: 'gemini-1.5-flash',
@@ -156,7 +181,7 @@ export class LLMProviderManager {
 
     // Try the agent's own provider first, then the others that have a key (LLM_FALLBACKS order).
     // A provider that is out of tokens / rate limited / over quota rests for a while and is skipped.
-    const chain = this.providerChain(config.provider);
+    const chain = await this.providerChain(config.provider, opts.localOnly);
     let previous = null;
     for (const provider of chain) {
       try {

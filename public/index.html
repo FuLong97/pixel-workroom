@@ -61,7 +61,7 @@
     <div id="goal-dock" class="absolute top-3 left-1/2 -translate-x-1/2 w-[min(640px,92%)] z-20 bg-slate-900/90 backdrop-blur border border-cyan-700/60 rounded-lg px-3 py-2.5 shadow-xl"></div>
 
     <!-- Bottom Instructions Overlay -->
-    <div class="absolute bottom-3 left-4 text-xs text-slate-400 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded border border-slate-800 pointer-events-none">
+    <div id="view-hint" class="absolute bottom-3 left-4 text-xs text-slate-400 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded border border-slate-800 pointer-events-none">
       <span>WASD / Arrows: <strong class="text-slate-200">Walk</strong></span> &bull;
       <span>Mouse Drag / Q,E: <strong class="text-slate-200">Look Around</strong></span> &bull;
       <span>Approach Desk: <strong class="text-cyan-300">[E] Inspect Screen</strong></span> &bull;
@@ -263,6 +263,7 @@
         <!-- Tab 6: API Keys Configuration -->
         <div id="tab-apikeys" class="tab-pane hidden">
           <div class="text-xs text-slate-400 mb-3">Connect your live API keys to power the agents (leave blank to use free local simulation):</div>
+          <div id="local-status" class="mb-3 p-3 rounded-lg border border-slate-800 bg-slate-950 text-xs text-slate-300">Checking for a local model (Ollama / LM Studio)...</div>
           <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3 font-mono text-xs">
             <div>
               <label class="block text-slate-300 font-semibold mb-1">Google Gemini API Key (Powers Alice & Diana):</label>

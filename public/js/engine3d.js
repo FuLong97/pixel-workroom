@@ -79,6 +79,12 @@ export class Workroom3DEngine {
     this.hover = null;
     this.topLayout = null;
 
+    // dust floating in the lamp light
+    this.dust = Array.from({ length: 70 }, (_, i) => ({
+      x: 2 + Math.random() * 19, y: 2 + Math.random() * 21, z: 0.1 + Math.random() * 0.85,
+      vx: (Math.random() - 0.5) * 0.12, vy: (Math.random() - 0.5) * 0.12, vz: 0.01 + Math.random() * 0.03, phase: Math.random() * 6.28
+    }));
+
     this.keys = {};
     this.bindEvents();
   }
@@ -264,6 +270,13 @@ export class Workroom3DEngine {
       }
     }
 
+    for (const m of this.dust) {
+      m.x += m.vx * dt; m.y += m.vy * dt; m.z += m.vz * dt * Math.sin(m.phase + performance.now() / 2000);
+      if (m.z > 0.95 || m.z < 0.05) m.vz = -m.vz;
+      if (m.x < 1.5 || m.x > 22) m.vx = -m.vx;
+      if (m.y < 1.5 || m.y > 23) m.vy = -m.vy;
+    }
+
     this.checkProximity();
   }
 
@@ -328,6 +341,12 @@ export class Workroom3DEngine {
   setViewMode(mode) {
     this.viewMode = mode;
     this.hover = null;
+    const hint = document.getElementById('view-hint');
+    if (hint) {
+      hint.innerHTML = mode === 'top'
+        ? '<span>Click floor: <strong class="text-slate-200">Move</strong></span> &bull; <span>Click agent: <strong class="text-cyan-300">Open monitor</strong></span> &bull; <span>[V]: <strong class="text-slate-200">First person</strong></span>'
+        : hint.dataset.fpv;
+    }
     const btn = document.getElementById('btn-view-toggle');
     if (btn) btn.textContent = mode === 'top' ? '🚶 First-Person [V]' : '🗺️ Top View [V]';
   }
@@ -463,11 +482,26 @@ export class Workroom3DEngine {
           ctx.font = `bold ${Math.max(8, tile * 0.6)}px monospace`;
           ctx.textAlign = 'center';
           const label = `${a.name} · ${a.state}`;
-          const w = ctx.measureText(label).width;
-          ctx.fillStyle = 'rgba(15,23,42,0.9)';
-          ctx.fillRect(cx - w / 2 - 3, cy - tile * 1.9, w + 6, tile * 0.85);
+          const w = ctx.measureText(label).width + tile * 0.9;
+          const lh = tile * 0.9;
+          const lx = cx - w / 2;
+          const ly = cy - tile * 1.95;
+          ctx.fillStyle = 'rgba(8, 12, 24, 0.92)';
+          ctx.beginPath();
+          ctx.roundRect(lx, ly, w, lh, lh / 2);
+          ctx.fill();
+          ctx.strokeStyle = color + '99';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          const live = a.state !== 'IDLE';
+          ctx.fillStyle = live ? '#22c55e' : '#64748b';
+          ctx.beginPath();
+          ctx.arc(lx + lh * 0.5, ly + lh / 2, tile * 0.16, 0, Math.PI * 2);
+          ctx.fill();
           ctx.fillStyle = color;
-          ctx.fillText(label, cx, cy - tile * 1.9 + tile * 0.62);
+          ctx.textAlign = 'left';
+          ctx.fillText(label, lx + lh * 0.85, ly + lh * 0.68);
+          ctx.textAlign = 'center';
           this.drawHealthBar(cx - tile, cy - tile * 1.05, tile * 2, Math.max(3, tile * 0.22), a.energy);
         }
       }
@@ -515,12 +549,6 @@ export class Workroom3DEngine {
     }
 
     this.post?.vignette && ctx.drawImage(this.post.vignette, 0, 0);
-
-    // Title
-    ctx.font = 'bold 10px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#22d3ee';
-    ctx.fillText('TOP VIEW — click floor to move, click agent for monitor', 6, 12);
 
     if (this.showScanlines) this.renderScanlines();
   }
@@ -637,10 +665,25 @@ export class Workroom3DEngine {
       const dark = Math.min(0.8, Math.max(0, 1 - lit * 1.0)) + (side === 1 ? 0.08 : 0);
       ctx.fillStyle = `rgba(6, 9, 20, ${Math.min(0.92, dark)})`;
       ctx.fillRect(x, drawStart, 1, drawEnd - drawStart);
+
+      // Polish: soft shadow under the ceiling, dark baseboard with a bright top edge, contact shadow on the floor
+      const wallH = drawEnd - drawStart;
+      if (wallH > 8) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.30)';
+        ctx.fillRect(x, drawStart, 1, Math.max(1, wallH * 0.07));
+        ctx.fillStyle = 'rgba(28, 18, 12, 0.62)';
+        ctx.fillRect(x, drawEnd - wallH * 0.075, 1, wallH * 0.075);
+        ctx.fillStyle = 'rgba(255, 235, 200, 0.16)';
+        ctx.fillRect(x, drawEnd - wallH * 0.075, 1, Math.max(1, wallH * 0.012));
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+        ctx.fillRect(x, drawEnd - wallH * 0.16, 1, wallH * 0.085);
+      }
     }
 
     // 3. Render 3D Sprites
     this.renderSprites();
+
+    this.renderDust();
 
     // Glow + vignette, then HUD on top
     this.post.apply();
@@ -659,6 +702,31 @@ export class Workroom3DEngine {
     if (this.showScanlines) {
       this.renderScanlines();
     }
+  }
+
+  renderDust() {
+    const { ctx, width, height } = this;
+    const p = this.player;
+    const invDet = 1.0 / (p.planeX * p.dirY - p.dirX * p.planeY);
+    const t = performance.now() / 1000;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const m of this.dust) {
+      const dx = m.x - p.x, dy = m.y - p.y;
+      const tx = invDet * (p.dirY * dx - p.dirX * dy);
+      const ty = invDet * (-p.planeY * dx + p.planeX * dy);
+      if (ty < 0.4 || ty > 14) continue;
+      const sx = Math.floor((width / 2) * (1 + tx / ty));
+      if (sx < 0 || sx >= width || ty >= this.zBuffer[sx]) continue;
+      const sy = height / 2 + (0.5 - m.z) * (height / ty);
+      const glow = Math.min(1, lightAt(m.x, m.y) - 0.5);
+      if (glow <= 0) continue;
+      const a = Math.max(0, glow) * (0.25 + 0.25 * Math.sin(t * 2 + m.phase)) * Math.min(1, 6 / ty);
+      ctx.fillStyle = `rgba(255, 236, 200, ${a.toFixed(3)})`;
+      const size = ty < 3 ? 2 : 1;
+      ctx.fillRect(sx, sy, size, size);
+    }
+    ctx.restore();
   }
 
   renderSprites() {
@@ -694,29 +762,63 @@ export class Workroom3DEngine {
       const spriteImg = this.assets.getSprite(sprite.spriteId);
       if (!spriteImg) continue;
 
-      for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
-        const texX = Math.floor(((stripe - (-spriteWidth / 2 + spriteScreenX)) * spriteImg.width) / spriteWidth);
+      const w = drawEndX - drawStartX;
+      const h = drawEndY - drawStartY;
+      if (w <= 0 || h <= 0) continue;
 
-        if (transformY < this.zBuffer[stripe]) {
-          ctx.drawImage(
-            spriteImg,
-            texX,
-            0,
-            1,
-            spriteImg.height,
-            stripe,
-            drawStartY,
-            1,
-            drawEndY - drawStartY
-          );
-        }
+      // agents breathe a little while they work
+      const agent = sprite.type === 'agent' ? this.state.agents?.[sprite.agentId] : null;
+      const t = performance.now() / 1000;
+      const bob = agent && agent.state !== 'IDLE' ? Math.sin(t * 3 + sprite.x) * h * 0.012 : 0;
+      const centerVisible = transformY < this.zBuffer[Math.min(width - 1, Math.max(0, spriteScreenX))];
+
+      // contact shadow on the floor
+      if (centerVisible) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
+        ctx.beginPath();
+        ctx.ellipse(spriteScreenX, drawEndY - h * 0.02, w * 0.4, Math.max(2, h * 0.055), 0, 0, Math.PI * 2);
+        ctx.fill();
       }
+
+      // soft glow from an agent's monitor, in their colour
+      if (agent && centerVisible) {
+        const gy = drawStartY + h * 0.45;
+        const g = ctx.createRadialGradient(spriteScreenX, gy, 0, spriteScreenX, gy, w * 0.9);
+        g.addColorStop(0, (agent.color || '#38bdf8') + '55');
+        g.addColorStop(1, (agent.color || '#38bdf8') + '00');
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = g;
+        ctx.fillRect(spriteScreenX - w, gy - w, w * 2, w * 2);
+        ctx.restore();
+      }
+
+      // draw the sprite into a scratch canvas (respecting walls in front), light it, then composite
+      const tmp = this.spriteTmp || (this.spriteTmp = document.createElement('canvas'));
+      if (tmp.width < w || tmp.height < h) {
+        tmp.width = Math.max(tmp.width, w);
+        tmp.height = Math.max(tmp.height, h);
+      }
+      const tctx = tmp.getContext('2d');
+      tctx.imageSmoothingEnabled = false;
+      tctx.clearRect(0, 0, tmp.width, tmp.height);
+      for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
+        if (transformY >= this.zBuffer[stripe]) continue;
+        const texX = Math.floor(((stripe - (-spriteWidth / 2 + spriteScreenX)) * spriteImg.width) / spriteWidth);
+        tctx.drawImage(spriteImg, texX, 0, 1, spriteImg.height, stripe - drawStartX, 0, 1, h);
+      }
+      const lit = Math.min(1, lightAt(sprite.x, sprite.y) * Math.max(0.35, 1 - transformY * 0.03));
+      tctx.globalCompositeOperation = 'source-atop';
+      tctx.fillStyle = `rgba(6, 9, 20, ${Math.max(0, 0.62 - lit * 0.5).toFixed(3)})`;
+      tctx.fillRect(0, 0, w, h);
+      tctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(tmp, 0, 0, w, h, drawStartX, drawStartY + bob, w, h);
 
       // 3D Status Banner for Agents
       if (sprite.type === 'agent' && transformY < 14) {
         const agent = this.state.agents[sprite.agentId];
         if (agent) {
-          const badgeY = Math.max(8, drawStartY - 20);
+          const badgeY = Math.max(8, drawStartY - 20 + bob);
           const badgeX = spriteScreenX;
 
           ctx.save();
