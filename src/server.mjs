@@ -8,6 +8,7 @@ import { stateManager } from './state.mjs';
 import { agentCoordinator } from './agent-coordinator.mjs';
 import { llmProvider } from './llm-provider.mjs';
 import { runner, WORKSPACE } from './runner.mjs';
+import { startTelegramFromEnv } from './telegram.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -345,6 +346,7 @@ stateManager.on('state_change', (change) => {
 
 // Start listening
 server.listen(PORT, () => {
+  startTelegramFromEnv(PORT);
   console.log(`====================================================`);
   console.log(`🎮 Pixel Workroom 3D Server running at: http://localhost:${PORT}`);
   console.log(`🔌 MCP Stdio Bridge active | WebSockets listening`);

@@ -28,6 +28,25 @@ On Windows you can also double-click `start.bat`.
 
 Builds use your own Claude plan. Agents may only read and write files inside `workspace/` (no shell commands).
 
+## Remote control from your phone (Telegram)
+
+Send a goal to your own Telegram bot and get a **screenshot of the result** back, e.g. "a snake game".
+
+1. In Telegram, talk to **@BotFather**, send `/newbot`, and copy the token.
+2. Put it in `.env`: `TELEGRAM_BOT_TOKEN=...` and start the workroom (`npm start`).
+3. Run `npm run telegram:setup`, then message your bot once. It saves your chat id into `.env` for you. Restart the workroom.
+4. Send a goal. You get progress messages and, when finished, a screenshot.
+
+| Message | Effect |
+|---|---|
+| any text | build solo (Bob) |
+| `/team <goal>` | full five-agent team |
+| `/improve <text>` | keep working on the previous project |
+| `/shot` | screenshot of the latest project |
+| `/status`, `/stop` | progress / cancel |
+
+Notes: only chats listed in `TELEGRAM_ALLOWED_CHAT_IDS` can give orders (everyone else is refused), because every goal spends your Claude plan and writes files on your computer. The workroom must be running on your computer. Screenshots use the Chrome or Edge you already have installed (`BROWSER_BIN` to override); they show the first screen of `index.html`, so a game is shown at its start state. WhatsApp is not supported: it needs a business account and a public webhook, which does not fit a local app.
+
 ## Controls
 
 | Key | Action |
@@ -95,7 +114,8 @@ node src/cli.mjs sprint "Mini game"     # scripted demo
 ## Development
 
 ```bash
-npm test      # integration + runner tests (no API calls, nothing written to the repo)
+npm test          # integration, runner and Telegram bot tests (no API calls)
+npm run test:e2e  # real server + real Chrome screenshot against a local fake Telegram
 ```
 
 ```

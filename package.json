@@ -8,7 +8,9 @@
     "start": "node src/server.mjs",
     "mcp": "node src/mcp-server.mjs",
     "cli": "node src/cli.mjs",
-    "test": "node test/workroom.test.mjs && node test/runner.test.mjs"
+    "test": "node test/workroom.test.mjs && node test/runner.test.mjs && node test/telegram.test.mjs && node test/setup-telegram.test.mjs",
+    "test:e2e": "node test/e2e-telegram.mjs",
+    "telegram:setup": "node scripts/telegram-setup.mjs"
   },
   "keywords": [
     "pixel-art",
@@ -39,6 +41,7 @@
     "mcp_config.example.json",
     ".env.example",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts"
   ]
 }
