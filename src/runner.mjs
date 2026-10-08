@@ -24,6 +24,19 @@ const MODE_STEPS = { solo: ['bob'], team: ['alice', 'bob', 'charlie', 'diana', '
 class Runner {
   constructor() {
     this.reset();
+    this.dir = this.newestProject();
+  }
+
+  // After a restart, offer the most recently modified project for "improve"
+  newestProject() {
+    try {
+      return fs.readdirSync(WORKSPACE, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => ({ name: d.name, t: fs.statSync(path.join(WORKSPACE, d.name)).mtimeMs }))
+        .sort((a, b) => b.t - a.t)[0]?.name || null;
+    } catch {
+      return null;
+    }
   }
 
   reset() {
@@ -35,6 +48,8 @@ class Runner {
     this.current = -1;
     this.error = null;
     this.cancelled = false;
+    // keep the last project folder so the next goal can opt in to improving it
+    this.dir = this.dir || null;
   }
 
   status() {
@@ -42,6 +57,7 @@ class Runner {
       running: this.running,
       goal: this.goal,
       mode: this.mode,
+      dir: this.dir,
       steps: this.steps,
       current: this.current,
       error: this.error,
@@ -49,11 +65,16 @@ class Runner {
     };
   }
 
+  get cwd() {
+    return path.join(WORKSPACE, this.dir || '');
+  }
+
   listFiles() {
+    if (!this.dir) return [];
     try {
-      return fs.readdirSync(WORKSPACE, { recursive: true, withFileTypes: true })
+      return fs.readdirSync(this.cwd, { recursive: true, withFileTypes: true })
         .filter((d) => d.isFile())
-        .map((d) => path.relative(WORKSPACE, path.join(d.parentPath || d.path, d.name)).replace(/\\/g, '/'))
+        .map((d) => path.relative(this.cwd, path.join(d.parentPath || d.path, d.name)).replace(/\\/g, '/'))
         .slice(0, 50);
     } catch {
       return [];
@@ -70,13 +91,21 @@ class Runner {
     stateManager.emit('state_change', { type: 'agent_update', data: agent });
   }
 
-  start(goal, mode = 'solo') {
+  start(goal, mode = 'solo', improve = false) {
     if (this.running) return { ok: false, error: 'A run is already in progress.' };
     goal = String(goal || '').trim().slice(0, 600);
     if (!goal) return { ok: false, error: 'Please describe a goal.' };
-    fs.mkdirSync(WORKSPACE, { recursive: true });
+    // Every goal gets its own folder so earlier projects are never overwritten.
+    // "improve" reuses the previous project's folder on purpose.
+    const reuse = improve && this.dir && fs.existsSync(path.join(WORKSPACE, this.dir)) ? this.dir : null;
+    const slug = goal.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'project';
+    const stamp = new Date().toISOString().slice(5, 19).replace(/[-:T]/g, '');
+    const dir = reuse || `${slug}-${stamp}`;
+    fs.mkdirSync(path.join(WORKSPACE, dir), { recursive: true });
 
+    const keepDir = dir;
     this.reset();
+    this.dir = keepDir;
     this.running = true;
     this.goal = goal;
     this.mode = mode === 'team' ? 'team' : 'solo';
@@ -114,7 +143,7 @@ class Runner {
     }
     this.running = false;
     this.current = this.steps.length;
-    stateManager.broadcast(`✅ Goal finished. Open the result from the Team Goal tab. Files: ${this.listFiles().join(', ') || 'none'}`, 'lead');
+    stateManager.broadcast(`✅ Goal finished. Open the result from the goal bar. Files: ${this.listFiles().join(', ') || 'none'}`, 'lead');
     stateManager.saveStateToFile();
   }
 
@@ -144,8 +173,8 @@ class Runner {
         const bin = process.env.CLAUDE_BIN || 'claude';
         // CLAUDE_BIN may point at a .mjs script (used for testing without spending tokens)
         child = /.m?js$/.test(bin)
-          ? spawn(process.execPath, [bin, ...args], { cwd: WORKSPACE, stdio: ['ignore', 'pipe', 'pipe'] })
-          : spawn(bin, args, { cwd: WORKSPACE, stdio: ['ignore', 'pipe', 'pipe'] });
+          ? spawn(process.execPath, [bin, ...args], { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+          : spawn(bin, args, { cwd: this.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
       } catch (e) {
         this.fail(`Could not start Claude Code: ${e.message}`);
         return resolve(false);

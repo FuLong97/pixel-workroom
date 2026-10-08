@@ -13,6 +13,7 @@ export class GoalPanel {
     this.status = null;
     this.draft = '';
     this.flash = null;
+    this.improve = false;
     this.render();
     this.poll();
   }
@@ -44,7 +45,7 @@ export class GoalPanel {
       return;
     }
     this.draft = '';
-    const r = await this.api('/api/run', { goal, mode: this.mode });
+    const r = await this.api('/api/run', { goal, mode: this.mode, improve: this.improve });
     if (!r.ok) this.flash = r.error;
     await this.poll();
   }
@@ -82,7 +83,7 @@ export class GoalPanel {
       const result = done
         ? `<div class="flex items-center justify-between mb-2 p-2 rounded bg-emerald-950/60 border border-emerald-700 text-xs text-emerald-200">
             <span>✅ Done: <strong>${this.esc(s.goal)}</strong> · ${s.files.length} file(s)</span>
-            ${hasIndex ? `<a href="${origin}/workspace/index.html" target="_blank" rel="noopener" class="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">▶ Open result</a>` : ''}
+            ${hasIndex ? `<a href="${origin}/workspace/${this.esc(s.dir)}/index.html" target="_blank" rel="noopener" class="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">▶ Open result</a>` : ''}
           </div>`
         : '';
       const err = s?.error
@@ -95,6 +96,9 @@ export class GoalPanel {
       const examples = EXAMPLES.map(
         (e) => `<button class="goal-ex px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400 hover:text-cyan-300">${this.esc(e)}</button>`
       ).join('');
+      const improveBox = s?.dir
+        ? `<label class="flex items-center gap-1.5 mt-1.5 text-[10px] text-slate-400"><input id="goal-improve" type="checkbox" ${this.improve ? 'checked' : ''}> improve the previous project (<code>${this.esc(s.dir)}</code>) instead of starting a new one</label>`
+        : '';
       body = `${result}${err}${flash}
         <div class="flex items-center gap-1.5">
           <input id="goal-input" type="text" maxlength="300" placeholder="What should the team build? e.g. a snake game" class="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500">
@@ -107,7 +111,7 @@ export class GoalPanel {
         <div class="flex flex-wrap gap-1 mt-1.5 items-center">${examples}
           <button id="goal-refill" class="text-[10px] text-slate-500 hover:text-emerald-300 ml-auto" title="Reset every agent's token health bar to full">🔋 refill</button>
           <span class="text-[10px] text-slate-600">${this.mode === 'solo' ? '1 agent · fastest' : '5 agents · about 5x tokens'}</span>
-        </div>`;
+        </div>${improveBox}`;
     }
 
     const collapse = this.collapsed
@@ -142,6 +146,7 @@ export class GoalPanel {
       const st = await this.api('/api/tokens/refill', {});
       this.app.state.agents = st.agents;
     });
+    q('#goal-improve')?.addEventListener('change', (e) => (this.improve = e.target.checked));
     q('#goal-stop')?.addEventListener('click', async () => {
       await this.api('/api/run/stop', {});
       this.poll();

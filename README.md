@@ -24,7 +24,7 @@ On Windows you can also double-click `start.bat`.
 1. Type what you want in the bar at the top ("a snake game") and press **▶ Build**.
    - **Solo**: Bob builds it. **Team**: Alice plans, Bob builds, Charlie improves the logic, Diana fixes bugs, Echo writes the README (about 5x the tokens).
 2. Click an agent in the progress bar to watch their screen live.
-3. When it says **Done**, click **▶ Open result**. Files are in `workspace/`.
+3. When it says **Done**, click **▶ Open result**. Each goal gets its own folder `workspace/<project>/`, so earlier projects are never overwritten. Tick "improve the previous project" to keep working on the last one instead.
 
 Builds use your own Claude plan. Agents may only read and write files inside `workspace/` (no shell commands).
 

@@ -146,7 +146,7 @@ async function handleApiRequest(req, res, pathname, url) {
     }
     if (pathname === '/api/run' && req.method === 'POST') {
       const body = await parseJsonBody(req);
-      const r = runner.start(body.goal, body.mode);
+      const r = runner.start(body.goal, body.mode, !!body.improve);
       res.writeHead(r.ok ? 200 : 400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(r));
       return;

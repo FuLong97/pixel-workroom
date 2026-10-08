@@ -1,5 +1,6 @@
 // public/js/engine3d.js - High-Definition First-Person 3D Pixel Raycaster Engine
 import { audioSynth } from './audio.js';
+import { FloorCeilingRenderer, PostFX, lightAt } from './fx.js';
 
 export class Workroom3DEngine {
   constructor(canvas, assetManager, state) {
@@ -100,6 +101,10 @@ export class Workroom3DEngine {
     this.canvas.height = this.height;
     this.zBuffer = new Float32Array(this.width);
     this.ctx.imageSmoothingEnabled = false;
+    if (this.floorFx) {
+      this.floorFx.resize(this.width, this.height);
+      this.post.resize(this.width, this.height);
+    }
   }
 
   setupOfficeAssets() {
@@ -385,15 +390,44 @@ export class Workroom3DEngine {
         const sx = ox + x * tile;
         const sy = oy + y * tile;
         if (v === 0) {
-          ctx.fillStyle = (x + y) % 2 ? '#1a1f2e' : '#161b28';
+          const alt = (x + y) % 2;
+          ctx.fillStyle = x > 19 ? (alt ? '#5a3d26' : '#4f3421') : alt ? '#2a3550' : '#222c44';
           ctx.fillRect(sx, sy, tile, tile);
+          ctx.fillStyle = 'rgba(255,255,255,0.05)';
+          ctx.fillRect(sx, sy, tile, 1);
+          ctx.fillRect(sx, sy, 1, tile);
         } else {
           ctx.fillStyle = wallColors[v] || '#475569';
           ctx.fillRect(sx, sy, tile, tile);
-          ctx.fillStyle = 'rgba(0,0,0,0.25)';
+          ctx.fillStyle = 'rgba(255,255,255,0.18)';
+          ctx.fillRect(sx, sy, tile, Math.max(1, tile >> 3));
+          ctx.fillStyle = 'rgba(0,0,0,0.3)';
           ctx.fillRect(sx, sy + tile - Math.max(1, tile >> 3), tile, Math.max(1, tile >> 3));
         }
       }
+    }
+
+    // Warm light pools under the ceiling lamps
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const lx of [5, 11, 17]) {
+      for (const ly of [7, 13, 19]) {
+        const g = ctx.createRadialGradient(ox + lx * tile, oy + ly * tile, 0, ox + lx * tile, oy + ly * tile, tile * 5);
+        g.addColorStop(0, 'rgba(255,214,150,0.22)');
+        g.addColorStop(1, 'rgba(255,214,150,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(ox + (lx - 5) * tile, oy + (ly - 5) * tile, tile * 10, tile * 10);
+      }
+    }
+    ctx.restore();
+
+    // Soft drop shadows under props
+    for (const s of this.sprites) {
+      const pos = this.spriteTopPos(s);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.beginPath();
+      ctx.ellipse(ox + pos.x * tile + tile * 0.15, oy + pos.y * tile + tile * 0.5, tile * 0.9, tile * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // Desk rugs under each agent
@@ -480,6 +514,8 @@ export class Workroom3DEngine {
       ctx.fillText(text, bx + 5, by + tile * 0.72);
     }
 
+    this.post?.vignette && ctx.drawImage(this.post.vignette, 0, 0);
+
     // Title
     ctx.font = 'bold 10px monospace';
     ctx.textAlign = 'left';
@@ -496,18 +532,12 @@ export class Workroom3DEngine {
     }
     const { ctx, width, height } = this;
 
-    // 1. Ceiling & Floor
-    ctx.fillStyle = '#0d111a';
-    ctx.fillRect(0, 0, width, height / 2);
-    ctx.fillStyle = '#141722';
-    ctx.fillRect(0, height / 2, width, height / 2);
-
-    // Ceiling glow
-    const grad = ctx.createLinearGradient(0, 0, 0, height / 2);
-    grad.addColorStop(0, '#1e2433');
-    grad.addColorStop(1, '#0d111a');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, width, height / 2);
+    // 1. Textured, lamp-lit ceiling & floor
+    if (!this.floorFx) {
+      this.floorFx = new FloorCeilingRenderer(this);
+      this.post = new PostFX(this);
+    }
+    this.floorFx.render();
 
     // 2. DDA Wall Raycaster
     for (let x = 0; x < width; x++) {
@@ -600,16 +630,20 @@ export class Workroom3DEngine {
 
       ctx.drawImage(tex, texX, 0, 1, tex.height, x, drawStart, 1, drawEnd - drawStart);
 
-      // Distance fog / shading
-      const shade = Math.min(0.72, perpWallDist * 0.04);
-      if (shade > 0) {
-        ctx.fillStyle = `rgba(8, 11, 18, ${side === 1 ? shade + 0.12 : shade})`;
-        ctx.fillRect(x, drawStart, 1, drawEnd - drawStart);
-      }
+      // Lamp-lit walls with distance fog
+      const hitX = this.player.x + perpWallDist * rayDirX;
+      const hitY = this.player.y + perpWallDist * rayDirY;
+      const lit = lightAt(hitX, hitY) * Math.max(0.25, 1 - perpWallDist * 0.035);
+      const dark = Math.min(0.8, Math.max(0, 1 - lit * 1.0)) + (side === 1 ? 0.08 : 0);
+      ctx.fillStyle = `rgba(6, 9, 20, ${Math.min(0.92, dark)})`;
+      ctx.fillRect(x, drawStart, 1, drawEnd - drawStart);
     }
 
     // 3. Render 3D Sprites
     this.renderSprites();
+
+    // Glow + vignette, then HUD on top
+    this.post.apply();
 
     // 4. In-World Interaction HUD Prompt
     if (this.nearInteractable) {

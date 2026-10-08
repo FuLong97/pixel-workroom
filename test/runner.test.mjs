@@ -41,6 +41,18 @@ assert.deepStrictEqual(runner.status().steps.map((s) => s.agent), ['alice', 'bob
 assert(runner.status().steps.every((s) => s.status === 'DONE'));
 console.log('  ✓');
 
+console.log('▶ Runner: each goal gets its own folder; improve reuses it');
+const firstDir = runner.status().dir;
+assert(firstDir, 'project dir is reported');
+runner.start('another app', 'solo');
+await wait(() => !runner.running);
+const secondDir = runner.status().dir;
+assert.notStrictEqual(secondDir, firstDir, 'new goal must not reuse the old folder');
+runner.start('tweak it', 'solo', true);
+await wait(() => !runner.running);
+assert.strictEqual(runner.status().dir, secondDir, 'improve reuses the previous folder');
+console.log('  ✓');
+
 console.log('▶ Budget: exhausted agent spends nothing and cache serves repeats');
 llmProvider.setBudget('echo', 400000, 400000);
 const r = await llmProvider.generateAgentTurn('echo', 'please analyse the architecture in detail');
