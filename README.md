@@ -94,6 +94,8 @@ The server prints your Wi-Fi address on start (`📱 Phone (same Wi-Fi) opens fi
 | `M` / `C` | Toggle minimap / CRT scanlines |
 | `Esc` | Close dialogs |
 
+**Slow computer or tablet?** The picture size (📐 button: 320 / 640 / 960 wide) steps down by itself when frames take too long (more than 22 ms of processing, about 30 fps), and tells you. It never steps up on its own and never overrides a size you chose.
+
 ## Connect your AI tools (MCP)
 
 Start the web UI (`npm start`), then register the stdio server once per tool. Use the absolute path to `src/mcp-server.mjs`.
@@ -128,6 +130,19 @@ Then ask your tool, for example: *"Use pixel-workroom to split 'build a snake ga
 | Charlie, Diana, Echo | logic, bug fixes, docs | `haiku` (`CLAUDE_CHECK_MODEL`) |
 
 The expensive model only writes a few lines, the cheap ones do the bulk, and each worker gets a small, clear job instead of the whole problem, which keeps quality up while tokens go down. `ORCHESTRATE=0` switches back to one model for every step. **Solo** is a single builder and never uses the planner. Hover a step in the goal bar to see its model.
+
+**Why the steps run one after the other.** Each step needs the one before it: Bob builds the files, Charlie edits them, Diana tests Charlie's version. Measured on 12 real team runs (Alice 22 s, Bob 136 s, Charlie 68 s, Diana 44 s, Echo about 44 s), the only step that does not depend on the code is Echo, and running it next to Bob would save about 14 %. Letting Charlie and Diana overlap would reach about 28 %, but both edit the same files, so one would overwrite the other and Diana would test code that is about to change. Neither is worth a worse result, so the order stays.
+
+## Every project keeps its history (and can be undone)
+
+Each project folder is a small git repository. After every finished step the runner saves **one commit written by the worker who did it** (`Alice: Plan: …`, `Bob: Build: …`, `Charlie`, `Diana`, `Echo`), so every step has a diff and the team's work is traceable. In the **📚 Library** tab, **🕘 History** lists the steps with the files and lines each one changed, and **↩ Back to here** puts the project back to that step.
+
+- **Nothing is thrown away.** Going back first saves the present state (even files nobody had committed) on a branch `undo/<time>`. Get it back with `git checkout undo/<time>` inside the project folder.
+- **A worker that crashes or is cancelled halfway does not leave a broken project.** Its unfinished files are kept on a branch `wip/<worker>-<time>` and the project is put back to the last finished step. The next goal in line waits until that is done.
+- **Improving an older project** first saves it as a "Starting point", so even the first step can be undone.
+- Needs `git` on the PATH. Without it, or with `PROJECT_GIT=0`, projects are built exactly as before, just without history.
+- Steps use one linear history instead of one branch per worker, because the workers take turns; branches would only matter if they worked at the same time on the same files.
+- The history is never served: `/workspace/…/.git` answers 404, also on your Wi-Fi.
 
 ## Live progress and what the agents run
 
@@ -212,11 +227,12 @@ node src/cli.mjs broadcast "Stand-up in five"
 - The goal runner lets Claude Code use `Read, Write, Edit, Glob, Grep` inside `workspace/` only. Review generated code before running it anywhere that matters.
 - The server has no authentication. Run it on your own machine; do not expose the port to a network.
 - `.env` and runtime state are git-ignored. Never commit API keys.
+- Project history (`.git` inside each project) is never served over HTTP, and every git command names the project's own `.git` explicitly, so it can never write into another repository.
 
 ## Development
 
 ```bash
-npm test          # integration, runner and Telegram bot tests (no API calls)
+npm test          # integration, runner, Telegram, models, history and render tests (no API calls)
 npm run test:e2e  # real server + real Chrome screenshot against a local fake Telegram
 npm run screenshots [project-folder]  # regenerate docs/images (needs Chrome or Edge)
 ```
@@ -225,6 +241,7 @@ npm run screenshots [project-folder]  # regenerate docs/images (needs Chrome or 
 src/server.mjs             HTTP, WebSocket, REST API
 src/mcp-server.mjs         MCP stdio server (syncs with the web UI through the state file)
 src/runner.mjs             Goal runner (spawns Claude Code in workspace/)
+src/versioning.mjs         One git repository per project: a commit per step, roll back, keep failed work aside
 src/agent-coordinator.mjs  Agent behaviour, token budget sync
 src/llm-provider.mjs       Claude / OpenAI / Gemini calls, Token Saver, budgets
 src/state.mjs              Shared state and persistence

@@ -462,13 +462,11 @@ export class PixelWorkroomApp {
       const modes = ['retro', 'crisp', 'hd'];
       const current = this.engine.resolutionMode;
       const nextIdx = (modes.indexOf(current) + 1) % modes.length;
-      const nextMode = modes[nextIdx];
-      this.engine.setResolution(nextMode);
-      
-      const labels = { retro: '📐 320p Retro', crisp: '📐 640p Crisp', hd: '📐 960p HD' };
-      resBtn.textContent = labels[nextMode];
+      this.setPictureSize(modes[nextIdx]);
+      this.resPinned = true;           // a choice made by hand is never overridden by the automatic step-down
       audioSynth.playBleep();
     });
+    if (new URLSearchParams(location.search).get('res')) this.resPinned = true;
 
     // Audio toggle
     document.getElementById('btn-audio-toggle')?.addEventListener('click', (e) => {
@@ -516,14 +514,42 @@ export class PixelWorkroomApp {
     }).catch(() => {});
   }
 
+  setPictureSize(mode) {
+    this.engine.setResolution(mode);
+    const labels = { retro: '📐 320p Retro', crisp: '📐 640p Crisp', hd: '📐 960p HD' };
+    const btn = document.getElementById('btn-res-toggle');
+    if (btn) btn.textContent = labels[mode];
+    this.costSamples = [];
+  }
+
+  // Slow device? Watch what a first-person frame costs the processor. If the typical frame is too
+  // slow for about 30 frames per second, step the picture down one size (960 -> 640 -> 320 wide)
+  // instead of stuttering. It only ever steps down, and never overrides a size chosen with the
+  // 📐 button or ?res=.
+  watchFrameCost(ms) {
+    if (this.resPinned || this.shotFreezeAt || this.engine.viewMode !== 'fpv' || document.hidden) return;
+    const samples = this.costSamples || (this.costSamples = []);
+    samples.push(ms);
+    if (samples.length < 120) return;
+    const typical = samples.slice(30).sort((a, b) => a - b)[45];     // the first frames are still warming up
+    this.costSamples = [];
+    if (typical <= 22) return;
+    const smaller = { hd: 'crisp', crisp: 'retro' }[this.engine.resolutionMode];
+    if (!smaller) return;
+    this.setPictureSize(smaller);
+    this.toast(`Slow device (${typical.toFixed(0)} ms per frame): picture set to ${smaller === 'retro' ? '320p Retro' : '640p Crisp'}. The 📐 button changes it back.`, 4500);
+  }
+
   startLoop() {
     setInterval(() => this.updateTokenHud(), 2000);
     const loop = (now) => {
       const dt = Math.min(0.1, (now - this.lastTime) / 1000);
       this.lastTime = now;
 
+      const t0 = performance.now();
       this.engine.update(dt);
       this.engine.render();
+      this.watchFrameCost(performance.now() - t0);
 
       // screenshot mode: stop animating after a moment so a headless browser can finish
       if (this.shotFreezeAt && now > this.shotFreezeAt) return;

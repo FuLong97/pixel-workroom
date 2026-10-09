@@ -13,6 +13,7 @@ import { phoneBase, isLoopback } from './network.mjs';
 import { detectLocal, pickChatModel, pickToolModel } from './local.mjs';
 import * as localModels from './local-models.mjs';
 import { versionInfo } from './version.mjs';
+import * as versioning from './versioning.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -93,7 +94,7 @@ const server = http.createServer((req, res) => {
   if (pathname.startsWith('/workspace/')) {
     const rel = decodeURIComponent(pathname.slice('/workspace/'.length)) || 'index.html';
     const wf = path.join(WORKSPACE, rel.endsWith('/') ? rel + 'index.html' : rel);
-    if (!wf.startsWith(WORKSPACE) || !fs.existsSync(wf) || !fs.statSync(wf).isFile()) {
+    if (!wf.startsWith(WORKSPACE) || !fs.existsSync(wf) || !fs.statSync(wf).isFile() || insideHistory(wf)) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
       return;
@@ -139,6 +140,24 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// A project's saved history (.git) is never served. The real path is checked, because on Windows
+// ".GIT", ".git." and short names like GIT~1 all lead to the same folder.
+function insideHistory(file) {
+  try {
+    const real = path.relative(fs.realpathSync.native(WORKSPACE), fs.realpathSync.native(file));
+    return real.startsWith('..') || versioning.isInternal(real);
+  } catch {
+    return true;
+  }
+}
+
+// A project folder named in an API call: plain folder name inside the workspace, nothing else
+function projectDir(name) {
+  if (typeof name !== 'string' || !/^[A-Za-z0-9._-]{1,120}$/.test(name) || /^\.+$/.test(name)) return null;
+  const dir = path.join(WORKSPACE, name);
+  try { return fs.statSync(dir).isDirectory() ? dir : null; } catch { return null; }
+}
+
 // JSON body helper
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -163,7 +182,9 @@ async function handleApiRequest(req, res, pathname, url) {
         for (const d of fs.readdirSync(WORKSPACE, { withFileTypes: true })) {
           if (!d.isDirectory()) continue;
           const dir = path.join(WORKSPACE, d.name);
-          const files = fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((f) => f.isFile()).slice(0, 300);
+          const files = fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+            .filter((f) => f.isFile() && !versioning.isInternal(path.relative(dir, path.join(f.parentPath || f.path, f.name))))
+            .slice(0, 300);
           const index = path.join(dir, 'index.html');
           let title = '';
           if (fs.existsSync(index)) {
@@ -173,12 +194,36 @@ async function handleApiRequest(req, res, pathname, url) {
           // "last changed" = the newest file (a folder's own time only moves when files are added or removed)
           const newestFile = files.reduce((t, f) => Math.max(t, fs.statSync(path.join(f.parentPath || f.path, f.name)).mtimeMs), 0);
           const updated = newestFile || fs.statSync(dir).mtimeMs;
-          projects.push({ name: d.name, title, files: files.length, hasIndex: fs.existsSync(index), updated });
+          projects.push({ name: d.name, title, files: files.length, hasIndex: fs.existsSync(index), updated, versioned: fs.existsSync(path.join(dir, '.git')) });
         }
       } catch { /* no workspace yet: an empty library */ }
       projects.sort((a, b) => b.updated - a.updated);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ projects: projects.slice(0, 100) }));
+      return;
+    }
+    // The steps of one project (one commit per finished step), newest first
+    if (pathname === '/api/projects/history' && req.method === 'GET') {
+      const dir = projectDir(url.searchParams.get('dir'));
+      res.writeHead(dir ? 200 : 404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(dir ? { commits: await versioning.history(dir) } : { error: 'No such project.' }));
+      return;
+    }
+    // Go back to an earlier step. The present state is kept on a branch, so nothing is lost.
+    if (pathname === '/api/projects/rollback' && req.method === 'POST') {
+      const body = await parseJsonBody(req);
+      const dir = projectDir(body.dir);
+      let status = 200;
+      let out;
+      if (!dir) { status = 404; out = { error: 'No such project.' }; }
+      else if (runner.busy && runner.dir === body.dir) { status = 409; out = { error: 'The team is working on this project right now. Wait until it is done.' }; }
+      else {
+        out = await versioning.rollback(dir, body.sha);
+        if (!out.ok) status = 400;
+        else stateManager.broadcast(`↩️ ${body.dir} went back to step ${out.to}. The previous state is kept on branch ${out.backup}.`, 'system');
+      }
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(out));
       return;
     }
     if (pathname === '/api/version' && req.method === 'GET') {
