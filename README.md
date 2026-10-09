@@ -133,6 +133,19 @@ The expensive model only writes a few lines, the cheap ones do the bulk, and eac
 
 **Why the steps run one after the other.** Each step needs the one before it: Bob builds the files, Charlie edits them, Diana tests Charlie's version. Measured on 12 real team runs (Alice 22 s, Bob 136 s, Charlie 68 s, Diana 44 s, Echo about 44 s), the only step that does not depend on the code is Echo, and running it next to Bob would save about 14 %. Letting Charlie and Diana overlap would reach about 28 %, but both edit the same files, so one would overwrite the other and Diana would test code that is about to change. Neither is worth a worse result, so the order stays.
 
+## Every result is opened in a browser (the check)
+
+The workers can only read and write files, so nothing used to run what they built. Now the runner does, the way you would: it opens the finished `index.html` **from disk, with no network**, in a throwaway headless Chrome/Edge and looks at what happens. It costs no tokens, only a few seconds.
+
+- **What counts as a problem:** an uncaught error (with file and line), `console.error` output, a local file that cannot be loaded, a script that needs the internet, a page that hangs, or a page that drew nothing. Console warnings and an external stylesheet or image are only noted.
+- **Team:** after Bob's build the page is opened; **Diana gets the real error text** in her prompt. After Diana it is opened again.
+- **Solo:** after Bob's build; Bob is the one who fixes.
+- **Fixing:** if the page still has problems, a fix step is added (`Fix 1`, then `Fix 2` at most) that gets the exact messages, and the page is opened again. A fix that changes nothing ends the fixing. A fix that crashes does not fail the goal: the half-done work is put aside on a branch and the page keeps its last version.
+- **What you see:** a badge on each checked step in the goal bar (`🔎✓` or `🔎2`, details on hover) and, when the goal ends, either "ran clean in a browser" or an amber "Built, but it has problems" with the list. Telegram says the same. A build with errors is no longer reported as a plain success.
+- **It proves** that the page loads without errors and shows something. It does **not** prove the game is fun or that every button does the right thing.
+- Without Chrome or Edge it is skipped and says so; `BROWSER_BIN` points at a specific one. `VERIFY=0` switches it off.
+- Safe by design: the page runs in its own temporary profile and **cannot reach any network, not even this computer**, so a generated page cannot call the runner while it is being checked.
+
 ## Every project keeps its history (and can be undone)
 
 Each project folder is a small git repository. After every finished step the runner saves **one commit written by the worker who did it** (`Alice: Plan: …`, `Bob: Build: …`, `Charlie`, `Diana`, `Echo`), so every step has a diff and the team's work is traceable. In the **📚 Library** tab, **🕘 History** lists the steps with the files and lines each one changed, and **↩ Back to here** puts the project back to that step.
@@ -227,6 +240,7 @@ node src/cli.mjs broadcast "Stand-up in five"
 - The goal runner lets Claude Code use `Read, Write, Edit, Glob, Grep` inside `workspace/` only. Review generated code before running it anywhere that matters.
 - The server has no authentication. Run it on your own machine; do not expose the port to a network.
 - `.env` and runtime state are git-ignored. Never commit API keys.
+- The browser check opens generated pages with no network at all (a dead proxy that also covers loopback) and a throwaway profile, so what a model wrote cannot reach this computer or the internet while it is checked.
 - Project history (`.git` inside each project) is never served over HTTP, and every git command names the project's own `.git` explicitly, so it can never write into another repository.
 
 ## Development
@@ -242,6 +256,7 @@ src/server.mjs             HTTP, WebSocket, REST API
 src/mcp-server.mjs         MCP stdio server (syncs with the web UI through the state file)
 src/runner.mjs             Goal runner (spawns Claude Code in workspace/)
 src/versioning.mjs         One git repository per project: a commit per step, roll back, keep failed work aside
+src/verify.mjs             Opens a finished project in headless Chrome/Edge (no network) and reports errors
 src/agent-coordinator.mjs  Agent behaviour, token budget sync
 src/llm-provider.mjs       Claude / OpenAI / Gemini calls, Token Saver, budgets
 src/state.mjs              Shared state and persistence

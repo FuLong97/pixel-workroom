@@ -14,13 +14,19 @@ if (process.env.FAKE_REALISTIC) {
   const worker = (prompt.match(/You are (Alice|Bob|Charlie|Diana|Echo)/) || [])[1];
   const goal = (prompt.match(/Goal: "([^"]*)"/) || [])[1] || 'goal';
   const edit = (note) => fs.appendFileSync('index.html', `\n<!-- ${note} -->`);
-  if (worker === 'Alice') fs.writeFileSync('PLAN.md', `# Plan for ${goal}\n`);
+  // a fix step (the runner found errors in the browser and hands them over) says so in its prompt
+  const isFix = /project in this folder was opened in a real browser/.test(prompt);
+  if (isFix && process.env.FAKE_NOCHANGE_FIX) { /* FAKE_NOCHANGE_FIX=1: the fixer looks at it and changes nothing */ }
+  else if (worker === 'Alice') fs.writeFileSync('PLAN.md', `# Plan for ${goal}\n`);
   else if (worker === 'Echo') fs.writeFileSync('README.md', `# ${goal}\nOpen index.html.\n`);
   else if (worker === 'Charlie') edit('logic by charlie');
-  else if (worker === 'Diana') edit('fixed by diana');
-  else fs.writeFileSync('index.html', `<!doctype html><h1>${goal}</h1>`);
-  // FAKE_FAIL_WORKER=Charlie: that worker leaves half-finished files behind and then crashes
-  if (worker && worker === process.env.FAKE_FAIL_WORKER) {
+  else if (worker === 'Diana') edit(isFix ? 'fix by diana' : 'fixed by diana');
+  // FAKE_BROKEN_PAGE=1: Bob's first version calls a function that does not exist; his fix does not
+  else if (isFix) fs.writeFileSync('index.html', '<!doctype html><h1>fixed by bob</h1>');
+  else fs.writeFileSync('index.html', `<!doctype html><h1>${goal}</h1>${process.env.FAKE_BROKEN_PAGE ? '<script>undefinedCall()</script>' : ''}`);
+  // FAKE_FAIL_WORKER=Charlie: that worker leaves half-finished files behind and then crashes.
+  // FAKE_FAIL_FIX=1 does the same, but only for fix steps.
+  if ((worker && worker === process.env.FAKE_FAIL_WORKER) || (isFix && process.env.FAKE_FAIL_FIX)) {
     edit('half done');
     fs.writeFileSync('half.js', 'function unfinished() {');
     out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'boom: it broke halfway', usage: { input_tokens: 10, output_tokens: 5 } });

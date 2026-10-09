@@ -242,7 +242,16 @@ Step ${s.current + 1}/${s.steps.length}: ${step?.agent} (${step?.label})`);
   async onFinished(e) {
     if (!this.isMine(e.owner)) return;
     if (!e.ok) return this.say(e.owner, `Stopped: ${e.error}`);
-    await this.say(e.owner, `Done: "${e.goal.slice(0, 120)}" (${e.files.length} files).`);
+    const goal = e.goal.slice(0, 120);
+    const v = e.verify;
+    const files = `${e.files.length} file${e.files.length === 1 ? '' : 's'}`;
+    if (v?.state === 'problems') {
+      const n = v.problems.length;
+      const list = v.problems.slice(0, 3).map((p, i) => `${i + 1}. ${p}`).join('\n');
+      await this.say(e.owner, `⚠️ Built "${goal}" (${files}), but it still has ${n} problem${n === 1 ? '' : 's'} when opened in a browser:\n${list}${n > 3 ? `\n...and ${n - 3} more` : ''}`);
+    } else {
+      await this.say(e.owner, `Done: "${goal}" (${files}).${v?.state === 'clean' ? ' ✓ It ran clean in a browser.' : ''}`);
+    }
     await this.sendShot(e.owner, e);
   }
 
