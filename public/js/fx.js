@@ -18,14 +18,26 @@ export function nearestLamp(x, y) {
   return { lx, ly, d2 };
 }
 
+// Same maths as nearestLamp, but only the squared distance and no object: the floor and ceiling ask
+// for it once per pixel, and allocating a result per pixel was the biggest cost of a frame.
+function lampD2(x, y) {
+  const lx = snap(x, 5, 17), ly = snap(y, 7, 19);
+  let d2 = (lx - x) ** 2 + (ly - y) ** 2;
+  if (x > 18.5) {
+    const by = Math.min(18, Math.max(6, Math.round((y - 6) / 6) * 6 + 6));
+    const d = (21 - x) ** 2 + (by - y) ** 2;
+    if (d < d2) d2 = d;
+  }
+  return d2;
+}
+
 // The floor lamps switch the room lights: 1 = on, lower = dim
 let lightLevel = 1;
 export const setLightLevel = (v) => { lightLevel = v; };
 
 // 0..~1.3 light level at a world position (soft pool under each lamp + dim ambient)
 export function lightAt(x, y) {
-  const { d2 } = nearestLamp(x, y);
-  return (0.62 + 1.1 / (1 + d2 * 0.1)) * lightLevel;
+  return (0.62 + 1.1 / (1 + lampD2(x, y) * 0.1)) * lightLevel;
 }
 
 const pack = (r, g, b) => (255 << 24) | (Math.min(255, b) << 16) | (Math.min(255, g) << 8) | Math.min(255, r);
@@ -39,6 +51,7 @@ export class FloorCeilingRenderer {
   constructor(engine) {
     this.engine = engine;
     this.size = 64;
+    this.rowRugs = [];
     this.floorTex = this.makeFloorTexture();
     this.woodTex = this.makeWoodTexture();
     this.ceilTex = this.makeCeilingTexture();
@@ -117,8 +130,9 @@ export class FloorCeilingRenderer {
     for (const r of this.engine.decorRugs || []) this.rugs.push(r);
   }
 
-  rugAt(fx, fy) {
-    for (const r of this.rugs) {
+  rugAt(fx, fy, rugs = this.rugs) {
+    for (let i = 0; i < rugs.length; i++) {
+      const r = rugs[i];
       const dx = fx - r.x, dy = fy - r.y;
       if (dx > -r.hw && dx < r.hw && dy > -r.hh && dy < r.hh) {
         // a darker, brighter band around the edge makes it look like a real rug
@@ -126,6 +140,20 @@ export class FloorCeilingRenderer {
       }
     }
     return null;
+  }
+
+  // The rugs a floor row can touch at all. The row is a straight line across the floor, so its ends
+  // bound it; the margin covers rounding while stepping along it. Order is kept, so the first rug
+  // that matches is still the same one.
+  rugsOnRow(x0, y0, x1, y1) {
+    const loX = Math.min(x0, x1) - 0.05, hiX = Math.max(x0, x1) + 0.05;
+    const loY = Math.min(y0, y1) - 0.05, hiY = Math.max(y0, y1) + 0.05;
+    const out = this.rowRugs;
+    out.length = 0;
+    for (const r of this.rugs) {
+      if (r.x + r.hw > loX && r.x - r.hw < hiX && r.y + r.hh > loY && r.y - r.hh < hiY) out.push(r);
+    }
+    return out;
   }
 
   render() {
@@ -153,19 +181,21 @@ export class FloorCeilingRenderer {
       let fy = p.y + rowDist * ry0;
       const fog = Math.max(0.12, 1 - rowDist * 0.03);
       const row = y * w;
+      const rowRugs = isFloor ? this.rugsOnRow(fx, fy, fx + stepX * w, fy + stepY * w) : null;
 
       for (let x = 0; x < w; x++, fx += stepX, fy += stepY) {
         const cellX = Math.floor(fx), cellY = Math.floor(fy);
         const u = Math.floor((fx - cellX) * size) & mask;
         const v = Math.floor((fy - cellY) * size) & mask;
-        const light = lightAt(fx, fy) * flicker;
+        const d2 = lampD2(fx, fy);
+        const light = (0.62 + 1.1 / (1 + d2 * 0.1)) * lightLevel * flicker;
 
         if (isFloor) {
           const breakroom = fx > 19.2;
           const tex = breakroom ? this.woodTex : this.floorTex;
           const c = tex[v * size + u];
           let r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
-          const rug = this.rugAt(fx, fy);
+          const rug = rowRugs.length ? this.rugAt(fx, fy, rowRugs) : null;
           if (rug) { r = rug[0] + (r - 30) * 0.2; g = rug[1] + (g - 37) * 0.2; b = rug[2] + (b - 54) * 0.2; }
           // warm lamp light on top of cool ambient, fogged into the dark
           const k = light * fog;
@@ -176,7 +206,6 @@ export class FloorCeilingRenderer {
           buf[row + x] = pack(r * k * 1.05 + sheen + wg * 6, g * k + sheen * 0.92 + wg * 20, b * k * 0.98 + sheen * 0.7 + wg * 46);
         } else {
           const c = this.ceilTex[v * size + u];
-          const { d2 } = nearestLamp(fx, fy);
           const k = (0.55 + light * 0.5) * fog;
           let r = (c & 255) * k, g = ((c >> 8) & 255) * k, b = ((c >> 16) & 255) * k;
           if (d2 < 0.75) {

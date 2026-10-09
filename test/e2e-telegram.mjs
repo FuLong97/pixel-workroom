@@ -102,6 +102,11 @@ try {
     const via = (p, init) => fetch(`http://${lan.ip}:${PORT}${p}`, init).then((r) => r.status);
     const dir = link.split('/workspace/')[1].split('/')[0];
     assert.strictEqual(await via(`/workspace/${dir}/index.html`), 200, 'project visible from the network');
+    const hasHistory = fs.existsSync(path.join(tmp, 'workspace', dir, '.git', 'HEAD'));   // only when git is installed
+    if (hasHistory) {
+      assert.strictEqual(await via(`/workspace/${dir}/.git/HEAD`), 404, 'the saved history is not shared on the network');
+      assert.strictEqual(await via(`/workspace/${dir}/.git/config`), 404, 'nor the repository settings');
+    }
     assert.strictEqual(await via('/'), 403, 'control UI hidden from the network');
     assert.strictEqual(await via('/api/state'), 403, 'API hidden from the network');
     assert.strictEqual(await via('/api/projects'), 403, 'the project list is not shown to the network');
@@ -109,7 +114,7 @@ try {
     assert.strictEqual(await via('/api/local/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"model":"qwen3:8b"}' }), 403, 'nobody on the network can start a download');
     assert.strictEqual(await via('/api/local/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"role":"chat","model":"x"}' }), 403, 'nor change the models');
     assert.strictEqual(await via('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"goal":"evil"}' }), 403, 'builds cannot be started from the network');
-    console.log(`  ✓ via ${lan.ip}: project 200, UI/API/run 403`);
+    console.log(`  ✓ via ${lan.ip}: project 200${hasHistory ? ', its .git 404' : ''}, UI/API/run 403`);
   }
 
   console.log('▶ e2e: stranger is refused');

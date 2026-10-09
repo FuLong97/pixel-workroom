@@ -377,16 +377,64 @@ export class IntercomController {
       `<div class="mb-2 text-slate-400">${projects.length} project(s). Each goal gets its own folder, so nothing is overwritten.</div>` +
       projects
         .map((p) => `
-        <div class="p-3 mb-2 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-3">
-          <div class="min-w-0">
-            <div class="font-bold text-slate-100 truncate">${this.escapeHtml(p.title || p.name)}</div>
-            <div class="text-slate-500 truncate">${this.escapeHtml(p.name)} · ${p.files} files · ${new Date(p.updated).toLocaleString()}</div>
+        <div class="p-3 mb-2 rounded-xl bg-slate-950 border border-slate-800">
+          <div class="flex items-center gap-3">
+            <div class="min-w-0">
+              <div class="font-bold text-slate-100 truncate">${this.escapeHtml(p.title || p.name)}</div>
+              <div class="text-slate-500 truncate">${this.escapeHtml(p.name)} · ${p.files} files · ${new Date(p.updated).toLocaleString()}</div>
+            </div>
+            ${p.versioned ? `<button data-hist="${this.escapeHtml(p.name)}" title="Every step of the team is saved. Look at them or go back." class="ml-auto shrink-0 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold">🕘 History</button>` : '<span class="ml-auto"></span>'}
+            ${p.hasIndex
+              ? `<a href="${base}/workspace/${encodeURIComponent(p.name)}/index.html" target="_blank" rel="noopener" class="shrink-0 px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white font-semibold">▶ Open</a>`
+              : '<span class="text-slate-600">no index.html</span>'}
           </div>
-          ${p.hasIndex
-            ? `<a href="${base}/workspace/${encodeURIComponent(p.name)}/index.html" target="_blank" rel="noopener" class="ml-auto shrink-0 px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white font-semibold">▶ Open</a>`
-            : '<span class="ml-auto text-slate-600">no index.html</span>'}
+          <div class="hidden mt-2" data-hist-list="${this.escapeHtml(p.name)}"></div>
         </div>`)
         .join('');
+    // one handler for the whole list (assigned, not added, so reopening the tab never doubles it)
+    el.onclick = (e) => {
+      const open = e.target.closest('[data-hist]');
+      if (open) return this.toggleHistory(open.dataset.hist);
+      const back = e.target.closest('[data-restore]');
+      if (back) this.restoreStep(back.dataset.project, back.dataset.restore, back.dataset.label);
+    };
+  }
+
+  // The steps of one project, newest first, each with the worker who did it and a way back
+  async toggleHistory(name) {
+    const box = [...document.querySelectorAll('[data-hist-list]')].find((b) => b.dataset.histList === name);
+    if (!box) return;
+    if (!box.classList.contains('hidden')) return box.classList.add('hidden');
+    box.classList.remove('hidden');
+    box.textContent = 'Loading...';
+    try {
+      const { commits } = await (await fetch(`/api/projects/history?dir=${encodeURIComponent(name)}`)).json();
+      box.innerHTML = commits.length
+        ? commits.map((c, i) => `
+          <div class="flex items-center gap-2 py-1.5 border-t border-slate-800">
+            <span class="font-mono text-slate-500 shrink-0">${this.escapeHtml(c.short)}</span>
+            <span class="min-w-0 truncate"><strong class="text-cyan-300">${this.escapeHtml(c.author)}</strong> <span class="text-slate-300">${this.escapeHtml(c.subject)}</span></span>
+            <span class="ml-auto shrink-0 text-slate-500">${c.files} file${c.files === 1 ? '' : 's'} <span class="text-emerald-400">+${c.added}</span> <span class="text-rose-400">-${c.removed}</span> · ${new Date(c.at).toLocaleTimeString()}</span>
+            ${i === 0 ? '<span class="shrink-0 text-slate-600">latest</span>' : `<button data-restore="${this.escapeHtml(c.sha)}" data-project="${this.escapeHtml(name)}" data-label="${this.escapeHtml(c.subject)}" class="shrink-0 px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 text-white font-semibold">↩ Back to here</button>`}
+          </div>`).join('')
+        : '<div class="text-slate-500">No saved steps yet.</div>';
+    } catch {
+      box.textContent = 'Could not load the history.';
+    }
+  }
+
+  async restoreStep(project, sha, label) {
+    if (!window.confirm(`Go back to "${label}"?\n\nThe project goes back to that step. Today's state is kept on a backup branch, so nothing is lost.`)) return;
+    try {
+      const r = await fetch('/api/projects/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: project, sha }) });
+      const out = await r.json();
+      if (!r.ok) return this.app.toast(out.error || 'Could not go back.');
+      this.app.toast(`↩ Back at ${out.to}. The previous state is on branch ${out.backup}.`, 4500);
+      await this.refreshLibrary();
+      this.toggleHistory(project);
+    } catch {
+      this.app.toast('Could not reach the server.');
+    }
   }
 
   // Shows whether a free local model (Ollama / LM Studio) is running and which one will be used

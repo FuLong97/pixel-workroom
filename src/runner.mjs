@@ -10,6 +10,7 @@ import { agentCoordinator } from './agent-coordinator.mjs';
 import { llmProvider } from './llm-provider.mjs';
 import { backendOrder, backendName, buildArgs, isQuotaError, resolveBackend } from './backends.mjs';
 import { detectLocal, pickToolModel } from './local.mjs';
+import * as versioning from './versioning.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const WORKSPACE = process.env.WORKROOM_WORKSPACE || path.join(__dirname, '..', 'workspace');
@@ -58,6 +59,7 @@ class Runner extends EventEmitter {
     this.queue = [];
     this.job = null;
     this.seq = 0;
+    this.settling = false;   // a failed step is still being put back; the next goal waits for that
     this.cooldown = new Map(); // backend -> time until it is tried again after running out of tokens
     this.reset();
     this.dir = this.newestProject();
@@ -142,12 +144,18 @@ class Runner extends EventEmitter {
     return path.join(WORKSPACE, this.dir || '');
   }
 
+  // Busy = a goal is running, or its failed step is still being put back
+  get busy() {
+    return this.running || this.settling;
+  }
+
   listFiles() {
     if (!this.dir) return [];
     try {
       return fs.readdirSync(this.cwd, { recursive: true, withFileTypes: true })
         .filter((d) => d.isFile())
         .map((d) => path.relative(this.cwd, path.join(d.parentPath || d.path, d.name)).replace(/\\/g, '/'))
+        .filter((f) => !versioning.isInternal(f))
         .slice(0, 50);
     } catch {
       return [];
@@ -166,7 +174,7 @@ class Runner extends EventEmitter {
 
   // Legacy single-shot start: refuses while busy. Use submit() to queue instead.
   start(goal, mode = 'solo', improve = false) {
-    if (this.running) return { ok: false, error: 'A run is already in progress.' };
+    if (this.busy) return { ok: false, error: 'A run is already in progress.' };
     const r = this.submit({ goal, mode, improve });
     return r.ok ? { ok: true } : r;
   }
@@ -177,7 +185,7 @@ class Runner extends EventEmitter {
     if (!goal) return { ok: false, error: 'Please describe a goal.' };
     const job = { id: ++this.seq, goal, mode: mode === 'team' ? 'team' : 'solo', improve: !!improve, owner: String(owner), wasQueued: false };
 
-    if (!this.running) {
+    if (!this.busy) {
       this.startJob(job);
       return { ok: true, started: true, ahead: 0, job };
     }
@@ -197,7 +205,7 @@ class Runner extends EventEmitter {
   }
 
   next() {
-    if (this.running) return;
+    if (this.busy) return;
     const job = this.queue.shift();
     if (job) this.startJob(job);
   }
@@ -231,6 +239,7 @@ class Runner extends EventEmitter {
   finishJob(error = null) {
     const job = this.job;
     this.job = null;
+    this.settling = false;
     if (job) {
       this.emit('finished', { id: job.id, owner: job.owner, goal: job.goal, mode: job.mode, dir: this.dir, files: this.listFiles(), ok: !error, error });
     }
@@ -251,10 +260,43 @@ class Runner extends EventEmitter {
     if (step) step.status = 'FAILED';
     this.pushRun(true);
     stateManager.broadcast(`⚠️ Run stopped: ${msg}`, 'system');
-    this.finishJob(msg);
+    // put the half-finished step back first; the next goal in line must not start in the same folder meanwhile
+    this.settling = true;
+    this.keepPartialWork(step).finally(() => this.finishJob(msg));
+  }
+
+  // The project is a git repository: save one commit for a finished step, authored by the worker
+  async saveStep(step, index) {
+    const agent = stateManager.agents[step.agent];
+    const c = await versioning.commitAll(this.cwd, {
+      name: agent.name,
+      agent: step.agent,
+      subject: `${step.label}: ${this.goal}`,
+      body: `Step ${index + 1} of ${this.steps.length}, ${agent.name}`
+    });
+    if (!c) return null;
+    step.commit = c.short;
+    this.push(agent, `Saved as ${c.short} (${c.files} file${c.files === 1 ? '' : 's'}, +${c.added} -${c.removed})`);
+    this.refreshAgent(agent);
+    return c;
+  }
+
+  // A step that stopped halfway is kept on a side branch and the project goes back to the last finished step
+  async keepPartialWork(step) {
+    if (!step) return;
+    try {
+      const agent = stateManager.agents[step.agent];
+      const kept = await versioning.keepFailedWork(this.cwd, { name: agent.name, agent: step.agent, label: `${step.label}: ${this.goal}` });
+      if (!kept) return;
+      const note = `Put the project back to ${kept.restoredTo}. ${agent.name}'s unfinished work is kept on branch ${kept.branch}.`;
+      this.push(agent, note);
+      stateManager.broadcast(`↩️ ${note}`, 'system');
+      this.refreshAgent(agent);
+    } catch { /* versioning never breaks a run */ }
   }
 
   async loop() {
+    await versioning.ensureRepo(this.cwd);
     for (let i = 0; i < this.steps.length; i++) {
       if (this.cancelled) return this.fail('Cancelled.');
       this.current = i;
@@ -263,6 +305,7 @@ class Runner extends EventEmitter {
       this.pushRun(true);
       const ok = await this.runStep(step);
       if (!ok) return;
+      await this.saveStep(step, i);
       step.status = 'DONE';
       this.pushRun(true);
       this.emit('step', { owner: this.job?.owner, goal: this.goal, done: i + 1, total: this.steps.length, agent: step.agent, label: step.label });
@@ -281,6 +324,7 @@ class Runner extends EventEmitter {
       for (const d of fs.readdirSync(this.cwd, { recursive: true, withFileTypes: true })) {
         if (!d.isFile()) continue;
         const f = path.join(d.parentPath || d.path, d.name);
+        if (versioning.isInternal(path.relative(this.cwd, f))) continue;   // git's own bookkeeping is not the model's work
         out.set(f, fs.statSync(f).mtimeMs);
       }
     } catch { /* empty folder */ }
