@@ -4,7 +4,6 @@ import { Workroom3DEngine } from './engine3d.js';
 import { IntercomController } from './intercom.js';
 import { audioSynth } from './audio.js';
 import { GoalPanel } from './goal-panel.js';
-import { TouchControls } from './touch-controls.js';
 
 export class PixelWorkroomApp {
   constructor() {
@@ -15,7 +14,6 @@ export class PixelWorkroomApp {
     this.engine = new Workroom3DEngine(this.canvas, this.assets, this.state);
     this.intercom = new IntercomController(this);
     this.goalPanel = new GoalPanel(this);
-    this.touch = new TouchControls(this.engine, this.canvas.parentElement);
     const hint = document.getElementById('view-hint');
     if (hint) hint.dataset.fpv = hint.innerHTML;
 

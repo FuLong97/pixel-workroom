@@ -94,8 +94,6 @@ The server prints your Wi-Fi address on start (`📱 Phone (same Wi-Fi) opens fi
 | `M` / `C` | Toggle minimap / CRT scanlines |
 | `Esc` | Close dialogs |
 
-**Touch screen** (tablet, touch laptop, phone): a stick at the bottom left walks (the further you push, the faster), dragging the picture looks around, and a **USE** button at the bottom right appears next to anything you can use. Several fingers work at once. It shows up by itself on the first touch; `?touch=1` forces it on and `?touch=0` off. Note that the control UI itself is only reachable from the computer running the server (see [Open results on your iPhone](#open-results-on-your-iphone)), so this is for touch screens on that machine or a browser that can reach it.
-
 **Slow computer or tablet?** The picture size (📐 button: 320 / 640 / 960 wide) steps down by itself when frames take too long (more than 22 ms of processing, about 30 fps), and tells you. It never steps up on its own and never overrides a size you chose.
 
 ## Connect your AI tools (MCP)

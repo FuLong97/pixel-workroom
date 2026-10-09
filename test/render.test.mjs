@@ -1,4 +1,4 @@
-// The floor renderer's speed-ups must not change a single pixel, and the touch controls must be wired up
+// The floor renderer's speed-ups must not change a single pixel, and slow devices must get a smaller picture
 import './setup.mjs';
 import assert from 'assert';
 import { execFileSync } from 'child_process';
@@ -83,19 +83,10 @@ for (const f of fs.readdirSync(pub('js')).filter((n) => n.endsWith('.js'))) {
 }
 console.log('  ✓');
 
-console.log('▶ Touch controls: a stick for walking, a drag to look, a USE button, wired into the page');
-const touch = read('js/touch-controls.js');
-const engine = read('js/engine3d.js');
+console.log('▶ Slow devices step the picture size down by themselves, and never override a size chosen by hand');
 const app = read('js/app.js');
-const html = read('index.html');
-const css = read('css/style.css');
-assert(app.includes("import { TouchControls } from './touch-controls.js'") && /new TouchControls\(this\.engine/.test(app), 'the app creates it');
-for (const word of ['pointerdown', 'pointermove', 'pointercancel', 'setPointerCapture', 'engine.analog', 'triggerInteraction', 'workroom:viewmode', 'visibilitychange']) assert(touch.includes(word), `touch-controls.js uses ${word}`);
-assert(/this\.analog = \{ x: 0, y: 0 \}/.test(engine) && /const \{ x: sx, y: sy \} = this\.analog/.test(engine), 'the engine walks by the stick');
-assert(engine.includes("e.pointerType !== 'touch'") && engine.includes('lookId') && !engine.includes("addEventListener('touchstart'"), 'looking uses one finger id, not touches[0]');
-assert(/#render-canvas \{ touch-action: none; \}/.test(css) && css.includes('#touch-stick') && css.includes('#touch-use'), 'the page does not scroll or zoom under the fingers');
-assert(!html.includes('Virtual D-Pad') && !html.includes("engine.keys['w']=true"), 'the old tap-to-nudge buttons are gone');
-assert(app.includes('watchFrameCost') && app.includes('resPinned'), 'slow devices step the picture size down by themselves');
+assert(app.includes('watchFrameCost') && app.includes('resPinned'), 'the frame-cost watcher and the "chosen by hand" flag exist');
+assert(/this\.resPinned = true;/.test(app) && /get\('res'\)\) this\.resPinned = true/.test(app), 'the 📐 button and ?res= both pin the size');
 console.log('  ✓');
 
 console.log('\n🎉 RENDER TESTS PASSED');

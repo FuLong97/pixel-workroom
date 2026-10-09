@@ -72,6 +72,13 @@
       <span>Approach Desk: <strong class="text-cyan-300">[E] Inspect Screen</strong></span> &bull;
       <span><strong class="text-cyan-300">[T] MCP Intercom</strong></span>
     </div>
+
+    <!-- Virtual D-Pad for Touch / Quick Navigation -->
+    <div class="absolute bottom-3 right-4 flex space-x-1 sm:hidden">
+      <button class="w-10 h-10 bg-slate-800/90 rounded text-lg border border-slate-700" onclick="window.workroomApp.engine.keys['w']=true; setTimeout(()=>window.workroomApp.engine.keys['w']=false, 200);">⬆</button>
+      <button class="w-10 h-10 bg-slate-800/90 rounded text-lg border border-slate-700" onclick="window.workroomApp.engine.rotate(0.3)">⬅</button>
+      <button class="w-10 h-10 bg-slate-800/90 rounded text-lg border border-slate-700" onclick="window.workroomApp.engine.rotate(-0.3)">➡</button>
+    </div>
   </main>
 
   <!-- ============================================================= -->

@@ -72,10 +72,6 @@ export class Workroom3DEngine {
     // Interaction target
     this.nearInteractable = null;
 
-    // On-screen stick (see touch-controls.js): x = strafe, y = forward, each -1..1
-    this.analog = { x: 0, y: 0 };
-    this.touchMode = false;
-
     // Visual Flags
     this.showScanlines = true;
     this.showMinimap = true;
@@ -282,24 +278,18 @@ export class Workroom3DEngine {
       this.rotate(-deltaX * 0.005);
     });
 
-    // Touch: drag on the picture to look around. One finger is followed by its pointer id, so a
-    // second finger on the walking stick (its own element) never turns the camera.
-    let lookId = null;
-    let lastLookX = 0;
-    this.canvas.addEventListener('pointerdown', (e) => {
-      if (e.pointerType !== 'touch' || this.viewMode === 'top' || lookId !== null) return;
-      lookId = e.pointerId;
-      lastLookX = e.clientX;
-      this.canvas.setPointerCapture?.(e.pointerId);
+    // Touch
+    let lastTouchX = 0;
+    this.canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length > 0) lastTouchX = e.touches[0].clientX;
     });
-    this.canvas.addEventListener('pointermove', (e) => {
-      if (e.pointerId !== lookId) return;
-      this.rotate(-(e.clientX - lastLookX) * 0.006);
-      lastLookX = e.clientX;
+    this.canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length > 0) {
+        const deltaX = e.touches[0].clientX - lastTouchX;
+        lastTouchX = e.touches[0].clientX;
+        this.rotate(-deltaX * 0.006);
+      }
     });
-    const endLook = (e) => { if (e.pointerId === lookId) lookId = null; };
-    this.canvas.addEventListener('pointerup', endLook);
-    this.canvas.addEventListener('pointercancel', endLook);
   }
 
   rotate(angle) {
@@ -342,12 +332,6 @@ export class Workroom3DEngine {
     if (this.keys['d']) {
       dx += this.player.planeX * moveSpeed;
       dy += this.player.planeY * moveSpeed;
-    }
-    // the on-screen stick: the further it is pushed, the faster you walk
-    const { x: sx, y: sy } = this.analog;
-    if (sx || sy) {
-      dx += (this.player.dirX * sy + this.player.planeX * sx) * moveSpeed;
-      dy += (this.player.dirY * sy + this.player.planeY * sx) * moveSpeed;
     }
 
     // Collision detection
@@ -403,7 +387,6 @@ export class Workroom3DEngine {
     }
 
     this.nearInteractable = closest;
-    this.onNear?.(closest);
   }
 
   triggerInteraction() {
@@ -463,7 +446,6 @@ export class Workroom3DEngine {
     }
     const btn = document.getElementById('btn-view-toggle');
     if (btn) btn.textContent = mode === 'top' ? '🚶 First-Person [V]' : '🗺️ Top View [V]';
-    window.dispatchEvent(new CustomEvent('workroom:viewmode', { detail: mode }));
   }
 
   // Map a mouse event to a sprite or floor tile in the top-down view
@@ -1032,8 +1014,6 @@ export class Workroom3DEngine {
       title = item.title || 'OFFICE ASSET';
       subtitle = '[E] INTERACT';
     }
-    // there is no keyboard on a touch screen: point at the USE button instead
-    if (this.touchMode) subtitle = subtitle.replace('   |   [T] TALK OVER MCP', '').replace('[E]', 'TAP USE:');
 
     ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
     ctx.fillRect(bannerX, bannerY, bannerW, bannerH);
