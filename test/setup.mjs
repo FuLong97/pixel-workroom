@@ -10,3 +10,6 @@ export const TEST_DIR = dir;
 
 // Tests never talk to a real local model server (Ollama / LM Studio); local.test.mjs turns it back on for a fake one
 process.env.LOCAL_LLM = '0';
+
+// Finished projects are normally opened in a real browser to see if they run; tests that are not about that stay fast
+process.env.VERIFY = '0';

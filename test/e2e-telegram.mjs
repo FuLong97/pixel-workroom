@@ -92,6 +92,11 @@ try {
   assert(photo.bytes > 2000, 'screenshot should not be empty');
   console.log(`  ✓ real Chrome/Edge screenshot uploaded (${photo.bytes} bytes, PNG, multipart)`);
 
+  // the finished page was opened in the same real Chrome/Edge before the bot reported back
+  const doneMsg = sent.find((s) => s.text?.startsWith('Done:') || s.text?.startsWith('⚠️ Built'));
+  assert(doneMsg?.text.includes('It ran clean in a browser'), 'the bot says the page ran clean: ' + doneMsg?.text);
+  console.log('  ✓ ' + doneMsg.text);
+
   await wait(() => sent.some((s) => s.text?.includes('Open it on your iPhone')), 15000, 'phone link');
   const link = sent.find((s) => s.text?.includes('Open it on your iPhone')).text.match(/http:\/\/\S+/)[0];
   console.log('  ✓ phone link sent:', link);

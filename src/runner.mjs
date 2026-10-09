@@ -11,6 +11,7 @@ import { llmProvider } from './llm-provider.mjs';
 import { backendOrder, backendName, buildArgs, isQuotaError, resolveBackend } from './backends.mjs';
 import { detectLocal, pickToolModel } from './local.mjs';
 import * as versioning from './versioning.mjs';
+import { checkPage, verifyEnabled } from './verify.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const WORKSPACE = process.env.WORKROOM_WORKSPACE || path.join(__dirname, '..', 'workspace');
@@ -53,6 +54,13 @@ export const MAX_PER_OWNER = 2;    // goals one person may have waiting
 
 const MODE_STEPS = { solo: ['bob'], team: ['alice', 'bob', 'charlie', 'diana', 'echo'] };
 
+// The result is opened in a real browser (src/verify.mjs). What it finds goes to whoever fixes it:
+// Diana in a team (she is the QA worker), Bob when working alone. At most this many fix rounds per goal.
+export const MAX_REPAIRS = 2;
+const numbered = (problems) => problems.map((p, i) => `${i + 1}. ${p}`).join('\n');
+const findingsNote = (problems) => `\n\nWhen Bob's version was opened in a real browser (index.html from disk, no network) these problems appeared. They are real error messages, not guesses. Charlie may have fixed some already, so check the code before editing, and fix whatever is still there first:\n${numbered(problems)}`;
+const repairPrompt = (name, goal, problems) => `You are ${name}. Goal of this project: "${goal}". The project in this folder was opened in a real browser (index.html from disk, no network) and these problems appeared. They are real error messages, not guesses:\n${numbered(problems)}\nFind the cause of each one in the existing files and fix it with minimal edits. Do not rewrite from scratch and do not add features. It must still work without network and on an iPhone.`;
+
 class Runner extends EventEmitter {
   constructor() {
     super();
@@ -61,6 +69,7 @@ class Runner extends EventEmitter {
     this.seq = 0;
     this.settling = false;   // a failed step is still being put back; the next goal waits for that
     this.cooldown = new Map(); // backend -> time until it is tried again after running out of tokens
+    this.verifier = checkPage;  // (index.html path) => result; replaceable in tests
     this.reset();
     this.dir = this.newestProject();
   }
@@ -87,6 +96,9 @@ class Runner extends EventEmitter {
     this.error = null;
     this.cancelled = false;
     this.via = null;
+    this.checks = [];     // every time the result was opened in a browser
+    this.findings = [];   // what the first check found: handed to Diana
+    this.verify = null;   // latest verdict: { state: 'clean' | 'problems' | 'unchecked', problems, reason }
     // keep the last project folder so the next goal can opt in to improving it
     this.dir = this.dir || null;
   }
@@ -104,7 +116,8 @@ class Runner extends EventEmitter {
       queue: this.queue.map((j) => ({ id: j.id, goal: j.goal, mode: j.mode, owner: j.owner })),
       steps: this.steps,
       current: this.current,
-      error: this.error
+      error: this.error,
+      verify: this.verify
     };
   }
 
@@ -136,6 +149,7 @@ class Runner extends EventEmitter {
       steps: this.steps,
       current: this.current,
       error: this.error,
+      verify: this.verify,
       files: this.listFiles()
     };
   }
@@ -241,7 +255,7 @@ class Runner extends EventEmitter {
     this.job = null;
     this.settling = false;
     if (job) {
-      this.emit('finished', { id: job.id, owner: job.owner, goal: job.goal, mode: job.mode, dir: this.dir, files: this.listFiles(), ok: !error, error });
+      this.emit('finished', { id: job.id, owner: job.owner, goal: job.goal, mode: job.mode, dir: this.dir, files: this.listFiles(), ok: !error, error, verify: this.verify });
     }
     setImmediate(() => this.next());
   }
@@ -304,17 +318,85 @@ class Runner extends EventEmitter {
       step.status = 'RUNNING';
       this.pushRun(true);
       const ok = await this.runStep(step);
+      if (ok === 'soft') {                  // a fix that did not work: the goal goes on (Echo still writes the README), the page keeps its last state
+        this.pushRun(true);
+        continue;
+      }
       if (!ok) return;
       await this.saveStep(step, i);
       step.status = 'DONE';
       this.pushRun(true);
       this.emit('step', { owner: this.job?.owner, goal: this.goal, done: i + 1, total: this.steps.length, agent: step.agent, label: step.label });
+      await this.checkAfter(step, i);
     }
     this.running = false;
     this.current = this.steps.length;
-    stateManager.broadcast(`✅ Goal finished. Open the result from the goal bar. Files: ${this.listFiles().join(', ') || 'none'}`, 'system');
+    const files = this.listFiles().join(', ') || 'none';
+    const v = this.verify;
+    const text = v?.state === 'clean' ? `✅ Goal finished. It ran clean in a browser. Open the result from the goal bar. Files: ${files}`
+      : v?.state === 'problems' ? `⚠️ Goal finished, but the page still has ${v.problems.length} problem${v.problems.length === 1 ? '' : 's'} when opened in a browser: ${v.problems[0]}. Files: ${files}`
+      : `✅ Goal finished. Open the result from the goal bar. Files: ${files}${v?.state === 'unchecked' ? ` (not checked in a browser: ${v.reason})` : ''}`;
+    stateManager.broadcast(text, 'system');
     stateManager.saveStateToFile();
     this.finishJob(null);
+  }
+
+  // Opens the result in a browser (no tokens). Only two moments matter: after Bob's build in a team (what
+  // it finds goes to Diana), and after the fixer's turn (Diana in a team, Bob alone). If that still shows
+  // problems, one more fix step is added right after it, up to MAX_REPAIRS.
+  async checkAfter(step, i) {
+    if (!verifyEnabled() || this.cancelled) return;
+    const team = this.mode === 'team';
+    const fixer = team ? 'diana' : 'bob';
+    const firstBuild = team && step.agent === 'bob' && !step.repair;
+    if (!firstBuild && step.agent !== fixer) return;
+    if (step.repair && step.changed === false) return;     // a fix that changed nothing cannot have fixed anything
+
+    const result = await this.runCheck(step);
+    if (firstBuild) {
+      this.findings = result.problems || [];
+      return;
+    }
+    if (result.skipped || result.ok || this.cancelled) return;
+    const used = this.steps.filter((s) => s.repair).length;
+    if (used >= MAX_REPAIRS) return;
+    this.steps.splice(i + 1, 0, { agent: fixer, label: `Fix ${used + 1}`, status: 'PENDING', model: modelFor(fixer, team), repair: true, fix: result.problems });
+    this.pushRun(true);
+  }
+
+  async runCheck(step) {
+    const agent = stateManager.agents[step.agent];
+    this.push(agent, '🔎 Opening index.html in a browser to see if it runs...');
+    this.refreshAgent(agent);
+    let r;
+    try {
+      r = await this.verifier(path.join(this.cwd, 'index.html'));
+    } catch (e) {
+      r = { skipped: `the check failed: ${e.message}` };      // a broken check must never break a build
+    }
+    const n = r.problems?.length || 0;
+    step.check = r.skipped ? { skipped: r.skipped } : { ok: r.ok, count: n, problems: r.problems.slice(0, 5) };
+    this.checks.push({ after: step.label, agent: step.agent, ...step.check, at: Date.now() });
+    this.verify = r.skipped ? { state: 'unchecked', reason: r.skipped, problems: [] } : { state: r.ok ? 'clean' : 'problems', problems: r.problems };
+    const line = r.skipped ? `Not checked in a browser: ${r.skipped}`
+      : r.ok ? 'Ran clean in a browser: no errors, and something is on screen.'
+      : `Found ${n} problem${n === 1 ? '' : 's'} when opening it: ${r.problems[0]}${n > 1 ? ` (+${n - 1} more)` : ''}`;
+    this.push(agent, `🔎 ${line}`);
+    stateManager.broadcast(`🔎 ${agent.name}'s page: ${line}`, 'system');
+    this.refreshAgent(agent);
+    this.pushRun(true);
+    this.emit('check', { owner: this.job?.owner, goal: this.goal, agent: step.agent, label: step.label, verify: this.verify });
+    return r;
+  }
+
+  // A fix step that fails does not fail the goal: what was built stays, the half-done fix is put aside
+  async softFail(step, msg) {
+    const agent = stateManager.agents[step.agent];
+    step.status = 'FAILED';
+    this.push(agent, `The fix did not work: ${msg}`);
+    stateManager.broadcast(`⚠️ ${agent.name}'s fix did not work (${msg}). The page keeps its last working version.`, 'system');
+    await this.keepPartialWork(step);
+    return 'soft';
   }
 
   // File names with their change time, to prove a step really changed something
@@ -346,8 +428,11 @@ class Runner extends EventEmitter {
   async runStep(step) {
     const agent = stateManager.agents[step.agent];
     const role = ROLES[step.agent];
-    const prompt = role.prompt(this.goal, this.mode === 'team');
-    const { task } = stateManager.assignTask(step.agent, `${role.label}: ${this.goal.slice(0, 50)}`, prompt.slice(0, 120), role.category);
+    // a fix step gets the real error text; in a team Diana also hears what Bob's first version did when opened
+    const prompt = step.repair
+      ? repairPrompt(agent.name, this.goal, step.fix)
+      : role.prompt(this.goal, this.mode === 'team') + (step.agent === 'diana' && this.findings.length ? findingsNote(this.findings) : '');
+    const { task } = stateManager.assignTask(step.agent, `${step.repair ? step.label : role.label}: ${this.goal.slice(0, 50)}`, prompt.slice(0, 120), role.category);
     agent.screen.lines = [`// ${agent.name} is starting...`];
     agent.screen.thoughts = 'Reading the goal...';
     this.refreshAgent(agent);
@@ -387,7 +472,8 @@ class Runner extends EventEmitter {
       this.pushRun();
       opts.model = opts.model || step.model;
       const r = await this.execBackend(kind, target, step, agent, task, prompt, opts);
-      if (r.ok && role.mustWrite && !this.changedSince(before)) {
+      if (r.ok && step.repair) step.changed = this.changedSince(before);    // a fix that changed nothing ends the fixing
+      if (r.ok && role.mustWrite && !step.repair && !this.changedSince(before)) {
         // exit code 0 is not enough: small models sometimes "describe" the code without writing any file
         const hint = kind === 'local' ? ' (small local models often cannot use tools; try a larger one with LOCAL_RUN_MODEL)' : '';
         problems.push(`${backendName(kind)} finished but wrote no file${hint}`);
@@ -409,6 +495,7 @@ class Runner extends EventEmitter {
         continue;
       }
       this.finishStep(agent, task, false);
+      if (step.repair) return this.softFail(step, r.error);
       this.fail(r.error);
       return false;
     }
@@ -416,9 +503,11 @@ class Runner extends EventEmitter {
     this.finishStep(agent, task, false);
     if (this.cancelled) {
       this.fail('Cancelled.');
-    } else {
-      this.fail(`No model could do this step: ${problems.join('; ') || 'none configured'}.`);
+      return false;
     }
+    const why = `No model could do this step: ${problems.join('; ') || 'none configured'}.`;
+    if (step.repair) return this.softFail(step, why);
+    this.fail(why);
     return false;
   }
 

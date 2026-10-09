@@ -66,6 +66,20 @@ export class GoalPanel {
     return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   }
 
+  // What the browser check said about a step's result: a small badge on its chip, the details on hover
+  checkBadge(st) {
+    const c = st.check;
+    if (!c || c.skipped) return '';
+    return c.ok ? ' <span class="text-emerald-400" title="ran clean in a browser">🔎✓</span>' : ` <span class="text-amber-300">🔎${c.count}</span>`;
+  }
+
+  checkTitle(st) {
+    const c = st.check;
+    if (!c) return '';
+    if (c.skipped) return `\nNot checked in a browser: ${c.skipped}`;
+    return c.ok ? '\nOpened in a browser: ran clean' : `\nOpened in a browser, ${c.count} problem(s):\n${c.problems.join('\n')}`;
+  }
+
   render() {
     const s = this.status;
     const keepFocus = document.activeElement?.id === 'goal-input';
@@ -78,7 +92,7 @@ export class GoalPanel {
       const chips = s.steps
         .map((st, i) => {
           const border = i === s.current ? 'border-amber-400 text-amber-200' : 'border-slate-700 text-slate-300';
-          return `<button data-agent="${st.agent}" class="goal-step px-2 py-1 rounded border text-[11px] ${border} bg-slate-900 hover:bg-slate-800" title="${this.esc(st.agent)} · model: ${this.esc(st.model || 'default')}">${ICON[st.status] || '⚪'} ${this.esc(st.agent)} · ${this.esc(st.label)}</button>`;
+          return `<button data-agent="${st.agent}" class="goal-step px-2 py-1 rounded border text-[11px] ${border} bg-slate-900 hover:bg-slate-800" title="${this.esc(st.agent)} · model: ${this.esc(st.model || 'default')}${this.checkTitle(st)}">${ICON[st.status] || '⚪'} ${this.esc(st.agent)} · ${this.esc(st.label)}${this.checkBadge(st)}</button>`;
         })
         .join('');
       const queueList = s.queue?.length
@@ -107,9 +121,17 @@ export class GoalPanel {
       const done = s && s.goal && !s.error && s.steps.length > 0 && s.current >= s.steps.length;
       const hasIndex = s?.files?.includes('index.html');
       const origin = `http://127.0.0.1:${location.port}`;
+      // a build whose page still shows errors in a browser is not shown as a plain success
+      const broken = s?.verify?.state === 'problems';
+      const check = s?.verify?.state === 'clean'
+        ? '<br><span class="text-[10px] text-emerald-300">🔎 ran clean in a browser</span>'
+        : broken
+          ? `<br><span class="text-[10px] text-amber-200">🔎 ${s.verify.problems.length} problem(s) when opened in a browser:</span><ul class="text-[10px] text-amber-100 list-disc pl-4">${s.verify.problems.slice(0, 4).map((p) => `<li>${this.esc(p)}</li>`).join('')}</ul>`
+          : '';
+      const tone = broken ? 'bg-amber-950/60 border-amber-600 text-amber-100' : 'bg-emerald-950/60 border-emerald-700 text-emerald-200';
       const result = done
-        ? `<div class="flex items-center justify-between mb-2 p-2 rounded bg-emerald-950/60 border border-emerald-700 text-xs text-emerald-200">
-            <span>✅ Done: <strong>${this.esc(s.goal)}</strong> · ${s.files.length} file(s)${this.phone && hasIndex ? `<br><span class="text-[10px] text-emerald-300">📱 iPhone (same Wi-Fi): <code>${this.esc(this.phone)}/workspace/${this.esc(s.dir)}/</code></span>` : ''}</span>
+        ? `<div class="flex items-center justify-between mb-2 p-2 rounded border ${tone} text-xs">
+            <span>${broken ? '⚠️ Built, but it has problems' : '✅ Done'}: <strong>${this.esc(s.goal)}</strong> · ${s.files.length} file(s)${check}${this.phone && hasIndex ? `<br><span class="text-[10px] text-emerald-300">📱 iPhone (same Wi-Fi): <code>${this.esc(this.phone)}/workspace/${this.esc(s.dir)}/</code></span>` : ''}</span>
             ${hasIndex ? `<a href="${origin}/workspace/${this.esc(s.dir)}/index.html" target="_blank" rel="noopener" class="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">▶ Open result</a>` : ''}
           </div>`
         : '';

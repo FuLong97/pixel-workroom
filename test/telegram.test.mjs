@@ -116,6 +116,35 @@ await new Promise((r) => setTimeout(r, 100));
 assert.strictEqual(calls.length, msgs, 'nothing sent for a web goal');
 console.log('  ✓');
 
+console.log('▶ the result says whether the page ran in a browser: clean, with problems, or not checked');
+const done = (verify) => runner.emit('finished', { owner: '43', goal: 'a game', ok: true, files: ['index.html', 'app.js'], dir: 'a-game', verify });
+// the screenshot and the phone link follow the verdict, so look for the verdict by its text instead of taking the last message
+const said = (re) => texts(43).filter((t) => re.test(t));
+const fresh = async (verify, re) => {
+  const n = said(re).length;
+  done(verify);
+  await wait(() => said(re).length > n);
+  return said(re).at(-1);
+};
+
+assert.strictEqual(await fresh({ state: 'clean', problems: [] }, /^Done: "a game"/), 'Done: "a game" (2 files). ✓ It ran clean in a browser.');
+const bad = await fresh({ state: 'problems', problems: ['Uncaught TypeError: x is null (app.js:9)', 'Could not load hero.png (ERR_FILE_NOT_FOUND)'] }, /^⚠️ Built/);
+assert.strictEqual(bad, '⚠️ Built "a game" (2 files), but it still has 2 problems when opened in a browser:\n1. Uncaught TypeError: x is null (app.js:9)\n2. Could not load hero.png (ERR_FILE_NOT_FOUND)');
+const many = await fresh({ state: 'problems', problems: ['a', 'b', 'c', 'd', 'e'] }, /still has 5 problems/);
+assert(many.endsWith('3. c\n...and 2 more') && !many.includes('4. d'), 'the first three, then a count');
+assert(/it still has 1 problem when/.test(await fresh({ state: 'problems', problems: ['only one'] }, /only one/)), 'singular');
+
+// a page with problems is never announced as done; a page nobody looked at gets no claim either way
+const doneBefore = said(/^Done: "a game" \(2 files\)\.$/).length;
+for (const verify of [{ state: 'unchecked', reason: 'no Chrome', problems: [] }, null]) {
+  const n = said(/^Done: "a game" \(2 files\)\.$/).length;
+  done(verify);
+  await wait(() => said(/^Done: "a game" \(2 files\)\.$/).length > n);
+}
+assert.strictEqual(said(/^Done: "a game" \(2 files\)\.$/).length, doneBefore + 2);
+assert.strictEqual(said(/^Done: .*(problem|⚠️)/).length, 0, 'no "Done" message mentions problems');
+console.log('  ✓');
+
 console.log('\n🎉 TELEGRAM TESTS PASSED');
 bot.stop();
 process.exit(0);
