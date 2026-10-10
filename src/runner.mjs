@@ -450,6 +450,12 @@ class Runner extends EventEmitter {
       }
       this.child = child;
 
+      // A CLI that hangs would block the whole queue for ever: stop it after RUN_TIMEOUT_MIN minutes (default 30)
+      const limitMin = Number(process.env.RUN_TIMEOUT_MIN) > 0 ? Number(process.env.RUN_TIMEOUT_MIN) : 30;
+      let timedOut = false;
+      const watchdog = setTimeout(() => { timedOut = true; child.kill(); }, limitMin * 60000);
+      watchdog.unref?.();
+
       let buf = '';
       let tail = '';          // last output, used to tell "out of tokens" apart from a real error
       let failedMsg = null;   // set by Claude's result event when it reports an error
@@ -536,13 +542,16 @@ class Runner extends EventEmitter {
         tail = (tail + '\n' + d).slice(-1500);
       });
       child.on('error', (e) => {
+        clearTimeout(watchdog);
         spawnFailed = true;
         this.child = null;
         resolve({ unavailable: true, error: e.code === 'ENOENT' ? `${name} is not installed (command not found)` : `${name}: ${e.message}` });
       });
       child.on('close', (code) => {
+        clearTimeout(watchdog);
         this.child = null;
         if (spawnFailed) return;
+        if (timedOut) return resolve({ error: `${name} was stopped after ${limitMin} minutes without finishing (raise RUN_TIMEOUT_MIN in .env if your builds need longer).` });
         if (code === 0 && !failedMsg && !authFailed) return resolve({ ok: true });
         if (authFailed) return resolve({ unavailable: true, error: `${name} is not logged in (run "${kind}" once in a terminal)` });
         const detail = failedMsg || `${name} exited with code ${code}. ${tail.trim().slice(-240)}`;

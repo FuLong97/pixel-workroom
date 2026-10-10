@@ -38,7 +38,7 @@ npm install
 npm start          # http://localhost:3333
 ```
 
-On Windows you can also double-click `start.bat`.
+On Windows you can also double-click `start.bat`; on macOS/Linux run `./start.sh`.
 
 1. Type what you want in the bar at the top ("a snake game") and press **▶ Build**.
    - **Solo**: Bob builds it. **Team**: Alice plans, Bob builds, Charlie improves the logic, Diana fixes bugs, Echo writes the README (about 5x the tokens).
