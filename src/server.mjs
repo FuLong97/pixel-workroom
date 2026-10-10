@@ -14,6 +14,7 @@ import { detectLocal, pickChatModel, pickToolModel } from './local.mjs';
 import * as localModels from './local-models.mjs';
 import { versionInfo } from './version.mjs';
 import * as versioning from './versioning.mjs';
+import { isInside, safeDecode, hostAllowed, MAX_BODY, saveKeys, cleanPos } from './security.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,8 +69,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  // Only this computer's own names reach the UI/API (blocks DNS rebinding); phones on the Wi-Fi keep viewing /workspace/
+  let url;
+  try { url = new URL(req.url, 'http://localhost'); } catch { res.writeHead(400); res.end('Bad request'); return; }
   const pathname = url.pathname;
+  if (isLoopback(req.socket.remoteAddress) && !hostAllowed(req.headers.host)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('Unknown host name.');
+    return;
+  }
 
   // Anything that is not this computer (e.g. your iPhone on the Wi-Fi) may only VIEW generated projects.
   // The control UI, the API and the runner stay local, so nobody on the network can start builds.
@@ -92,9 +100,10 @@ const server = http.createServer((req, res) => {
 
   // Result of a team run (read-only static files)
   if (pathname.startsWith('/workspace/')) {
-    const rel = decodeURIComponent(pathname.slice('/workspace/'.length)) || 'index.html';
-    const wf = path.join(WORKSPACE, rel.endsWith('/') ? rel + 'index.html' : rel);
-    if (!wf.startsWith(WORKSPACE) || !fs.existsSync(wf) || !fs.statSync(wf).isFile() || insideHistory(wf)) {
+    const rel = safeDecode(pathname.slice('/workspace/'.length));
+    if (rel === null || rel.includes('\0')) { res.writeHead(400, { 'Content-Type': 'text/plain' }); res.end('Bad request'); return; }
+    const wf = path.join(WORKSPACE, rel === '' ? 'index.html' : rel.endsWith('/') ? rel + 'index.html' : rel);
+    if (!isInside(WORKSPACE, wf) || !fs.existsSync(wf) || !fs.statSync(wf).isFile() || insideHistory(wf)) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
       return;
@@ -113,7 +122,7 @@ const server = http.createServer((req, res) => {
   // Static file serving
   let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
   // Prevent directory traversal
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (!isInside(PUBLIC_DIR, filePath)) {
     res.writeHead(403, { 'Content-Type': 'text/plain' });
     res.end('Access Denied');
     return;
@@ -162,7 +171,11 @@ function projectDir(name) {
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', (chunk) => (body += chunk));
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > MAX_BODY) { reject(new Error('Request too large')); req.destroy(); }
+    });
+    req.on('error', reject);
     req.on('end', () => {
       try {
         resolve(body ? JSON.parse(body) : {});
@@ -412,16 +425,7 @@ async function handleApiRequest(req, res, pathname, url) {
 
     if (pathname === '/api/settings' && req.method === 'POST') {
       const body = await parseJsonBody(req);
-      if (body.geminiKey) process.env.GEMINI_API_KEY = body.geminiKey;
-      if (body.claudeKey) process.env.ANTHROPIC_API_KEY = body.claudeKey;
-      if (body.openaiKey) process.env.OPENAI_API_KEY = body.openaiKey;
-
-      const lines = [
-        `GEMINI_API_KEY=${process.env.GEMINI_API_KEY || ''}`,
-        `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY || ''}`,
-        `OPENAI_API_KEY=${process.env.OPENAI_API_KEY || ''}`
-      ];
-      fs.writeFileSync(ENV_FILE, lines.join('\n'), 'utf8');
+      saveKeys(ENV_FILE, { GEMINI_API_KEY: body.geminiKey, ANTHROPIC_API_KEY: body.claudeKey, OPENAI_API_KEY: body.openaiKey });
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, message: 'API keys saved to .env file!' }));
@@ -460,20 +464,15 @@ wss.on('connection', (ws, req) => {
       } else if (action.type === 'update_screen') {
         stateManager.updateAgentScreen(action.agentId, action.data);
       } else if (action.type === 'player_move') {
-        stateManager.player.pos = action.pos;
-        stateManager.player.dir = action.dir;
+        const pos = cleanPos(action.pos);
+        if (pos && Number.isFinite(action.dir)) {
+          stateManager.player.pos = pos;
+          stateManager.player.dir = action.dir;
+        }
       } else if (action.type === 'clear_jobs') {
         stateManager.clearAllJobs();
       } else if (action.type === 'save_keys') {
-        if (action.geminiKey) process.env.GEMINI_API_KEY = action.geminiKey;
-        if (action.claudeKey) process.env.ANTHROPIC_API_KEY = action.claudeKey;
-        if (action.openaiKey) process.env.OPENAI_API_KEY = action.openaiKey;
-        const lines = [
-          `GEMINI_API_KEY=${process.env.GEMINI_API_KEY || ''}`,
-          `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY || ''}`,
-          `OPENAI_API_KEY=${process.env.OPENAI_API_KEY || ''}`
-        ];
-        fs.writeFileSync(ENV_FILE, lines.join('\n'), 'utf8');
+        saveKeys(ENV_FILE, { GEMINI_API_KEY: action.geminiKey, ANTHROPIC_API_KEY: action.claudeKey, OPENAI_API_KEY: action.openaiKey });
       }
     } catch (e) {
       console.error('[WebSocket] Invalid action received:', e.message);
