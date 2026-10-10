@@ -331,7 +331,11 @@ export class WorkroomStateManager extends EventEmitter {
         whiteboard: this.whiteboard,
         stats: this.stats
       };
-      fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2), 'utf8');
+      // write to a temp file and rename it over the real one, so a crash or a reader in the other process
+      // (server and stdio MCP both use this file) never sees a half-written state
+      const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+      fs.renameSync(tmp, STATE_FILE);
       // remember our own write so the file watcher does not "reload" what we just saved
       this.lastWrittenMtime = fs.statSync(STATE_FILE).mtimeMs;
     } catch (err) {
